@@ -1,0 +1,30 @@
+[package]
+name = "flacura"
+version = "0.1.0"
+edition = "2024"
+description = "Extremely fast, minimal audio player with a waveform seekbar and an aurora that follows the music"
+license = "MIT"
+
+[dependencies]
+cpal = "0.18.2"
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+interprocess = "2.4.5"
+realfft = "3.5.0"
+rtrb = "0.4.0"
+rubato = "5.0.1"
+symphonia = { version = "0.6.1", features = ["all"] }
+
+# Same winit eframe uses, only to select the X11 backend (see ui::run).
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Decoding in debug builds is painfully slow; optimize dependencies even there.
+[profile.dev.package."*"]
+opt-level = 3
