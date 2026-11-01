@@ -37,13 +37,19 @@ jobs:
       - run: cargo test --locked --release
       - run: cargo build --locked --release
 
+      - name: Name executable
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: Copy-Item -LiteralPath target/release/flacura.exe -Destination "target/release/flacura-v${env:APP_VERSION}-windows-x86_64.exe"
+
       - name: Publish executable
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: Flacura v${{ steps.version.outputs.version }}
+          name: Flacura v${{ steps.version.outputs.version }} — Windows x86_64
           target_commitish: ${{ github.sha }}
-          files: target/release/flacura.exe
+          files: target/release/flacura-v${{ steps.version.outputs.version }}-windows-x86_64.exe
           fail_on_unmatched_files: true
           generate_release_notes: true
           make_latest: true

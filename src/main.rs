@@ -4,6 +4,7 @@ mod audio;
 mod aurora;
 mod config;
 mod decode;
+mod icon;
 mod ipc;
 mod motion;
 mod platform;

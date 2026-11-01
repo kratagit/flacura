@@ -16,6 +16,7 @@
 | File | Responsibility |
 | --- | --- |
 | `src/main.rs` | CLI file argument, `--register`/`--unregister`, single-instance setup, starts playback before creating the window; `APP_TITLE` embeds `CARGO_PKG_VERSION`. |
+| `build.rs`, `src/icon.rs` | Embed the Windows EXE icon/version resources at build time; shared procedural artwork also supplies the window icon. |
 | `src/audio.rs` | CPAL output, decoder thread, command/event channels, lock-free `rtrb` sample buffer, channel mapping, Rubato FFT resampling, seek/volume fades and output-device recovery. |
 | `src/decode.rs` | Symphonia probing/decoding setup, metadata, quality labels and the shared `AUDIO_EXTENSIONS` list. |
 | `src/waveform.rs` | Background peak/RMS waveform generation, cancellation, progressive atomic buckets; up to six workers for known-length files and one for unknown lengths. |
@@ -96,7 +97,7 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
   pushes to `main` (normally after merging). Branches, PRs and tags do not
   trigger builds. This is primarily a personal Windows application.
 - Every main run checks formatting, Clippy and tests, compiles once, and
-  publishes `flacura.exe` directly to GitHub Releases. Do not add ZIP archives,
+  publishes `flacura-vVERSION-windows-x86_64.exe` directly to GitHub Releases. Do not add ZIP archives,
   installers, release PRs or manual tag/version steps unless requested.
 - `.github/scripts/prepare-release.ps1` chooses the next patch version from
   existing `vMAJOR.MINOR.PATCH` tags, using Cargo.toml as a minimum baseline.
@@ -104,6 +105,10 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
 - The script adjusts only the CI checkout's Cargo.toml and Cargo.lock before
   compiling, so the title embeds the actual release version. It does not push
   version-bump commits. Keep both tracked Cargo versions consistent locally.
+- `build.rs` also embeds that Cargo version in the Windows file/product
+  resources. Keep the window title, EXE metadata and release filename aligned.
+  winresource requires the Windows SDK resource compiler (MSVC) or windres
+  (GNU); it is a build dependency only, not an installed runtime dependency.
 - Releases are ordinary published releases, named `Flacura vVERSION`, tagged
   at the triggering commit. The EXE is uploaded only after all checks pass.
 - Conventional Commit titles remain useful, but every main push releases;
