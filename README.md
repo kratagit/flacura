@@ -100,7 +100,8 @@ sudo apt install pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libgl
 
 Every push and pull request runs formatting, Clippy, tests and a release build
 for Windows (x86_64), Linux (x86_64) and macOS (Apple Silicon). You can also
-start a build manually from **Actions > build > Run workflow**.
+start a build manually from **Actions > build > Run workflow**. On `main`,
+builds run as part of the **releases** workflow.
 
 To download a binary, open a successful run in the repository's **Actions**
 tab and select the matching `flacura-*` artifact. Artifacts are kept for 14 days.
@@ -108,19 +109,34 @@ Tags matching `v*` also publish ZIP archives to GitHub Releases.
 
 ### Versioning
 
-The current version is **0.1.0**, defined in `Cargo.toml` and embedded in the
-window title at compile time. We use `MAJOR.MINOR.PATCH`: increment PATCH for
-fixes, MINOR for new features, and MAJOR for incompatible changes.
+The version is defined in `Cargo.toml` and embedded in the window title at
+compile time. Releases use `MAJOR.MINOR.PATCH` and are managed automatically
+by Release Please. The first release is `0.1.0`.
 
 Development artifacts include the version and commit, for example
 `flacura-windows-x86_64-v0.1.0-dev.abdbfab`. Release artifacts use `v0.1.0`.
 
-To publish a release, update `version` in `Cargo.toml`, run `cargo check` to
-update `Cargo.lock`, and commit both files. Then create and push the matching
-tag (for example `git tag v0.1.0` and `git push origin v0.1.0`). CI rejects a
-tag that does not match the package version and publishes the release only
-after all three platform builds pass. The first release can use the existing
-`0.1.0` version.
+Use Conventional Commits, preferably by choosing **Squash and merge** and
+setting the final commit title:
+
+- `fix: repair seeking` increments PATCH (`0.1.0` → `0.1.1`).
+- `feat: support a new audio format` increments MINOR (`0.1.0` → `0.2.0`).
+- `feat!: change an incompatible interface` increments MAJOR.
+- `docs:`, `ci:` and `chore:` alone do not create a new release.
+
+After changes reach `main` and the platform checks pass, Release Please opens
+or updates a release PR containing the new versions in `Cargo.toml` and
+`Cargo.lock`, and a generated `CHANGELOG.md`. Merge that PR when ready to ship.
+The bot creates the tag and GitHub Release, then builds that exact tagged
+commit and attaches the three ZIP archives after all builds pass. No manual
+version edits or tags are needed.
+
+This uses the built-in `GITHUB_TOKEN`; no personal access token is required.
+Repository settings must allow GitHub Actions to create pull requests.
+Bot-created PRs do not automatically trigger `pull_request` workflows with
+this token; `main` is checked after merge before the tag is created, and the
+release build is called directly so it does not depend on a bot tag triggering
+another workflow. If publishing fails, rerun the failed jobs in **Actions**.
 
 ### Tests
 
