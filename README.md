@@ -96,6 +96,16 @@ sudo apt install pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libgl
 - GNU (`x86_64-pc-windows-gnu`): needs MinGW-w64 binutils (`dlltool`) on
   `PATH`, e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT`.
 
+### GitHub Actions builds
+
+Every push and pull request runs formatting, Clippy, tests and a release build
+for Windows (x86_64), Linux (x86_64) and macOS (Apple Silicon). You can also
+start a build manually from **Actions > build > Run workflow**.
+
+To download a binary, open a successful run in the repository's **Actions**
+tab and select the matching `flacura-*` artifact. Artifacts are kept for 14 days.
+Tags matching `v*` also publish ZIP archives to GitHub Releases.
+
 ### Tests
 
 ```bash
