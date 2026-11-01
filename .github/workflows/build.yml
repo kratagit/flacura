@@ -30,6 +30,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read and validate version
+        id: version
+        shell: python
+        run: |
+          import os
+          import tomllib
+          from pathlib import Path
+
+          manifest = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+          version = manifest["package"]["version"]
+          lock = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
+          package = next(p for p in lock["package"] if p["name"] == "flacura" and "source" not in p)
+          if package["version"] != version:
+              raise SystemExit("Cargo.toml and Cargo.lock versions must match")
+          if os.environ["GITHUB_REF_TYPE"] == "tag":
+              if os.environ["GITHUB_REF_NAME"] != f"v{version}":
+                  raise SystemExit(f"Release tag must be v{version}")
+              label = f"v{version}"
+          else:
+              label = f"v{version}-dev.{os.environ['GITHUB_SHA'][:7]}"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"label={label}", file=output)
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -49,7 +72,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ matrix.artifact }}-${{ steps.version.outputs.label }}
           path: target/release/${{ matrix.bin }}
           if-no-files-found: error
           retention-days: 14

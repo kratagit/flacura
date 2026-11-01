@@ -12,6 +12,8 @@ mod waveform;
 
 use std::path::PathBuf;
 
+const APP_TITLE: &str = concat!("Flacura v", env!("CARGO_PKG_VERSION"));
+
 fn main() {
     let arg = std::env::args_os().nth(1);
     match arg.as_ref().and_then(|a| a.to_str()) {

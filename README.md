@@ -106,6 +106,22 @@ To download a binary, open a successful run in the repository's **Actions**
 tab and select the matching `flacura-*` artifact. Artifacts are kept for 14 days.
 Tags matching `v*` also publish ZIP archives to GitHub Releases.
 
+### Versioning
+
+The current version is **0.1.0**, defined in `Cargo.toml` and embedded in the
+window title at compile time. We use `MAJOR.MINOR.PATCH`: increment PATCH for
+fixes, MINOR for new features, and MAJOR for incompatible changes.
+
+Development artifacts include the version and commit, for example
+`flacura-windows-x86_64-v0.1.0-dev.abdbfab`. Release artifacts use `v0.1.0`.
+
+To publish a release, update `version` in `Cargo.toml`, run `cargo check` to
+update `Cargo.lock`, and commit both files. Then create and push the matching
+tag (for example `git tag v0.1.0` and `git push origin v0.1.0`). CI rejects a
+tag that does not match the package version and publishes the release only
+after all three platform builds pass. The first release can use the existing
+`0.1.0` version.
+
 ### Tests
 
 ```bash

@@ -63,7 +63,7 @@ pub fn run(player: Player, listener: Option<Listener>, config: Config) -> eframe
     #[allow(unused_mut)]
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Flacura")
+            .with_title(crate::APP_TITLE)
             .with_app_id("flacura")
             .with_inner_size([600.0, 320.0])
             .with_min_inner_size([420.0, 250.0])
@@ -354,7 +354,10 @@ impl App {
                         Some(a) => format!("{} — {}", info.title, a),
                         None => info.title.clone(),
                     };
-                    ctx.send_viewport_cmd(ViewportCommand::Title(title));
+                    ctx.send_viewport_cmd(ViewportCommand::Title(format!(
+                        "{title} — {}",
+                        crate::APP_TITLE
+                    )));
                     self.info = Some(info);
                 }
                 Event::Failed(path, e) => {
