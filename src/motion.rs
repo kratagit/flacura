@@ -38,17 +38,36 @@ impl Default for BackgroundMotion {
 }
 
 impl BackgroundMotion {
-    pub fn update(&mut self, dt: f32, energy: f32, pulse: f32) {
+    pub fn update(&mut self, dt: f32, energy: f32, pulse: f32, tempo: f32) {
         let follow = |value: &mut f32, target: f32, attack: f32, release: f32| {
             let tau = if target > *value { attack } else { release };
             *value += (target - *value) * (1.0 - (-dt / tau).exp());
         };
-        // Keep the first response within one or two frames, then soften the
-        // tail. Beats brighten/reshape the waves without jerking their phase.
-        follow(&mut self.energy, energy, 0.018, 0.095);
-        follow(&mut self.pulse, pulse, 0.020, 0.16);
-        let speed = 0.3 + 9.0 * self.energy * self.energy + 3.0 * self.pulse;
-        follow(&mut self.speed, speed, 0.055, 0.14);
+        // Fast-paced tracks get snappier attack and release envelopes.
+        let tempo = tempo.clamp(0.0, 1.0);
+        let responsiveness = 1.0 + 0.85 * tempo;
+        follow(
+            &mut self.energy,
+            energy,
+            0.018 / responsiveness,
+            0.095 / responsiveness,
+        );
+        follow(
+            &mut self.pulse,
+            pulse,
+            0.020 / responsiveness,
+            0.16 / responsiveness,
+        );
+        let speed = 0.3
+            + (2.5 * self.energy + 7.5 * self.energy * self.energy) * (1.0 + 0.9 * tempo)
+            + (3.0 + 3.0 * tempo) * self.pulse
+            + 3.5 * tempo * self.energy.max(0.25);
+        follow(
+            &mut self.speed,
+            speed,
+            0.055 / responsiveness,
+            0.14 / responsiveness,
+        );
     }
 }
 
@@ -63,6 +82,7 @@ pub struct Motion {
     bass_bins: std::ops::Range<usize>,
     bass_db: f32,
     bass_short_db: f32,
+    bass_long_db: Option<f32>,
     input: Vec<f32>,
     output: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
@@ -73,6 +93,7 @@ pub struct Motion {
     prev_db: Vec<f32>,
     flux: VecDeque<f32>,
     since_onset: f32,
+    onset_rate: f32,
     last_count: Option<u64>,
     raw_count: u64,
     /// Seconds since new audio last arrived.
@@ -90,6 +111,8 @@ pub struct Motion {
     pub bass_energy: f32,
     /// Short push on beats and attacks, decays in ~0.25 s.
     pub pulse: f32,
+    /// Estimated rhythmic pace / density of the music (0..1).
+    pub tempo: f32,
 }
 
 impl Motion {
@@ -106,6 +129,7 @@ impl Motion {
             bass_bins: 1..2,
             bass_db: -120.0,
             bass_short_db: -120.0,
+            bass_long_db: None,
             input: Vec::new(),
             output: Vec::new(),
             scratch: Vec::new(),
@@ -116,6 +140,7 @@ impl Motion {
             prev_db: vec![-120.0; BANDS],
             flux: VecDeque::with_capacity(64),
             since_onset: 1.0,
+            onset_rate: 0.0,
             last_count: None,
             raw_count: 0,
             idle: 1.0,
@@ -125,6 +150,7 @@ impl Motion {
             energy: 0.0,
             bass_energy: 0.0,
             pulse: 0.0,
+            tempo: 0.0,
         };
         m.configure(48_000);
         m
@@ -172,7 +198,7 @@ impl Motion {
 
     /// True while something still changes on screen.
     pub fn is_moving(&self) -> bool {
-        self.energy > 0.005 || self.bass_energy > 0.005 || self.pulse > 0.005
+        self.energy > 0.005 || self.bass_energy > 0.005 || self.pulse > 0.005 || self.tempo > 0.005
     }
 
     /// Consumes newly played audio and advances the smoothing by `dt` seconds.
@@ -240,8 +266,25 @@ impl Motion {
             0.12
         };
         self.bass_short_db += (bass_db - self.bass_short_db) * (1.0 - (-dt / bass_tau).exp());
+        let bass_long = match self.bass_long_db {
+            Some(l) if active && self.bass_db > -65.0 => {
+                l + (self.bass_short_db - l) * (1.0 - (-dt / 3.5).exp())
+            }
+            Some(l) => l,
+            None if active && self.bass_db > -65.0 => self.bass_db,
+            None => self.bass_short_db,
+        };
+        self.bass_long_db = Some(bass_long);
+        // Absolute bass loudness plus dynamic swings (swells and drops relative
+        // to the recent average), so sustained loud passages don't stay pinned at max.
+        let bass_abs = smoothstep(-48.0, -10.0, self.bass_short_db);
+        let bass_rel = if self.bass_short_db > -55.0 {
+            (0.35 + (self.bass_short_db - bass_long) / 14.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let bass_target = if active {
-            smoothstep(-48.0, -12.0, self.bass_short_db)
+            (0.45 * bass_abs + 0.55 * bass_rel).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -255,6 +298,23 @@ impl Motion {
         self.pulse *= (-dt / 0.15).exp();
         if self.pulse < 0.005 {
             self.pulse = 0.0;
+        }
+        if !active {
+            self.onset_rate *= (-dt / 0.35).exp();
+        }
+        let target_tempo = if active {
+            ((self.onset_rate - 0.8) / 4.2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let tempo_tau = if target_tempo > self.tempo {
+            0.12
+        } else {
+            0.40
+        };
+        self.tempo += (target_tempo - self.tempo) * (1.0 - (-dt / tempo_tau).exp());
+        if self.tempo < 0.003 && !active {
+            self.tempo = 0.0;
         }
     }
 
@@ -288,33 +348,48 @@ impl Motion {
             self.band_db[b] = 10.0 * (p * self.norm2 + 1e-14).log10();
         }
 
-        // Bass/kick pulse: positive low-band spectral flux above its baseline.
+        // Bass/kick pulse: positive low-band spectral flux above its baseline,
+        // plus broadband rhythmic flux to estimate the track's tempo/pace.
         let floor = self.column_db - 45.0;
         let mut flux = 0.0;
+        let mut broad_flux = 0.0;
         let mut bass_bands = 0;
         for b in 0..BANDS {
-            if self.bands[b].0 as f32 * self.rate as f32 / n as f32 > 250.0 {
-                break;
-            }
-            bass_bands += 1;
             let d = self.band_db[b].max(floor) - self.prev_db[b].max(floor);
             if d > 0.0 {
-                flux += d * (1.5 - b as f32 / BANDS as f32);
+                broad_flux += d;
+                if self.bands[b].0 as f32 * self.rate as f32 / n as f32 <= 250.0 {
+                    flux += d * (1.5 - b as f32 / BANDS as f32);
+                }
+            }
+            if self.bands[b].0 as f32 * self.rate as f32 / n as f32 <= 250.0 {
+                bass_bands += 1;
             }
         }
         flux /= bass_bands.max(1) as f32;
+        broad_flux /= BANDS as f32;
+        let col_dt = 1.0 / COLS_PER_SEC as f32;
+        self.onset_rate *= (-col_dt / 1.4).exp();
         self.prev_db.copy_from_slice(&self.band_db);
         let (mean, sd) = mean_sd(&self.flux);
-        self.since_onset += 1.0 / COLS_PER_SEC as f32;
-        if self.flux.len() >= 20
-            && flux > mean + 1.3 * sd
-            && flux > 0.5
-            && self.since_onset > 0.09
-            && self.bass_db > -48.0
-        {
-            self.pulse = self
-                .pulse
-                .max(((flux - mean) / (3.0 * sd + 1e-3)).clamp(0.4, 1.0));
+        self.since_onset += col_dt;
+        let bass_onset = self.flux.len() >= 20
+            && flux > mean + 1.15 * sd
+            && flux > 0.42
+            && self.since_onset > 0.08
+            && self.bass_db > -52.0;
+        let rhythm_onset = self.flux.len() >= 20
+            && broad_flux > 0.55
+            && self.since_onset > 0.08
+            && self.column_db > -48.0;
+        if bass_onset {
+            let strength = ((flux - mean) / (3.0 * sd + 1e-3)).clamp(0.4, 1.0);
+            self.pulse = self.pulse.max(strength);
+            self.onset_rate = (self.onset_rate + 1.15 * strength).min(8.0);
+            self.since_onset = 0.0;
+        } else if rhythm_onset && flux > mean + 0.8 * sd {
+            self.pulse = self.pulse.max(0.35);
+            self.onset_rate = (self.onset_rate + 0.85).min(8.0);
             self.since_onset = 0.0;
         }
         if self.flux.len() == 60 {
@@ -369,18 +444,50 @@ mod tests {
     #[test]
     fn background_reacts_quickly_without_an_instant_speed_jump() {
         let mut background = BackgroundMotion::default();
-        background.update(1.0 / 60.0, 1.0, 1.0);
+        background.update(1.0 / 60.0, 1.0, 1.0, 0.0);
         assert!(background.energy > 0.5);
         assert!(background.speed > 0.3 && background.speed < 3.0);
         for _ in 0..2 {
-            background.update(1.0 / 60.0, 1.0, 1.0);
+            background.update(1.0 / 60.0, 1.0, 1.0, 0.0);
         }
         assert!(background.energy > 0.9, "must respond within 50 ms");
         for _ in 0..120 {
-            background.update(1.0 / 60.0, 0.0, 0.0);
+            background.update(1.0 / 60.0, 0.0, 0.0, 0.0);
         }
         assert!(background.energy < 0.001 && background.pulse < 0.001);
         assert!((background.speed - 0.3).abs() < 0.001);
+    }
+
+    #[test]
+    fn faster_tempo_increases_background_speed_and_response() {
+        let mut slow_bg = BackgroundMotion::default();
+        let mut fast_bg = BackgroundMotion::default();
+        slow_bg.update(1.0 / 60.0, 0.6, 0.5, 0.0);
+        fast_bg.update(1.0 / 60.0, 0.6, 0.5, 0.9);
+        assert!(fast_bg.energy > slow_bg.energy);
+        assert!(fast_bg.speed > slow_bg.speed * 1.4);
+
+        // Pulse train at 4 Hz (fast 240 BPM eighth-notes) vs 1 Hz (slow 60 BPM).
+        let pulse_train = |hz: f32| -> Vec<f32> {
+            (0..(3.0 * RATE as f32) as usize)
+                .map(|i| {
+                    let t = i as f32 / RATE as f32;
+                    let phase = (t * hz).fract();
+                    let env = if phase < 0.18 { 0.6 } else { 0.02 };
+                    env * (std::f32::consts::TAU * 85.0 * t).sin()
+                })
+                .collect()
+        };
+        let mut slow = Motion::new();
+        slow.analyze(&pulse_train(1.0), RATE);
+        let mut fast = Motion::new();
+        fast.analyze(&pulse_train(4.0), RATE);
+        assert!(
+            fast.tempo > slow.tempo + 0.3,
+            "fast tempo {} vs slow {}",
+            fast.tempo,
+            slow.tempo
+        );
     }
 
     const RATE: u32 = 44_100;
@@ -401,14 +508,16 @@ mod tests {
         bass.analyze(&tone_at(80.0, 0.5, 1.0), RATE);
         let mut treble = Motion::new();
         treble.analyze(&tone_at(3000.0, 0.5, 1.0), RATE);
-        assert!(bass.bass_energy > 0.9, "bass: {}", bass.bass_energy);
+        assert!(bass.bass_energy > 0.5, "bass: {}", bass.bass_energy);
         assert!(treble.bass_energy < 0.05, "treble: {}", treble.bass_energy);
     }
 
     #[test]
     fn bass_reacts_within_eighty_milliseconds() {
         let mut bass = Motion::new();
-        bass.analyze(&tone_at(80.0, 0.5, 0.08), RATE);
+        let mut signal = tone_at(80.0, 0.02, 1.0);
+        signal.extend(tone_at(80.0, 0.5, 0.08));
+        bass.analyze(&signal, RATE);
         assert!(bass.bass_energy > 0.8, "bass: {}", bass.bass_energy);
     }
 
