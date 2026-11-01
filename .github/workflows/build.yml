@@ -2,34 +2,62 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: ["**", "!main"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build
+        type: string
+        default: ""
+      release_tag:
+        description: Existing release to attach binaries to
+        type: string
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            bin: flacura
-            artifact: flacura-linux-x86_64
-          - os: windows-latest
-            bin: flacura.exe
-            artifact: flacura-windows-x86_64
-          - os: macos-latest
-            bin: flacura
-            artifact: flacura-macos-arm64
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    outputs:
+      label: ${{ steps.version.outputs.label }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      - name: Read and validate version
+        id: version
+        shell: python
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          manifest = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+          version = manifest["package"]["version"]
+          lock = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
+          package = next(p for p in lock["package"] if p["name"] == "flacura" and "source" not in p)
+          if package["version"] != version:
+              raise SystemExit("Cargo.toml and Cargo.lock versions must match")
+          tag = os.environ["RELEASE_TAG"]
+          if tag:
+              if tag != f"v{version}":
+                  raise SystemExit(f"Release tag must be v{version}")
+              label = f"v{version}"
+          else:
+              sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+              label = f"v{version}-dev.{sha[:7]}"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"label={label}", file=output)
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -38,28 +66,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --check
-      - run: cargo clippy --release -- -D warnings
-      - run: cargo test --release
-      - run: cargo build --release
+      - run: cargo clippy --locked --release -- -D warnings
+      - run: cargo test --locked --release
+      - run: cargo build --locked --release
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: target/release/${{ matrix.bin }}
+          name: flacura-windows-x86_64-${{ steps.version.outputs.label }}
+          path: target/release/flacura.exe
+          if-no-files-found: error
+          retention-days: 14
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
+        with:
+          name: flacura-windows-x86_64-${{ needs.build.outputs.label }}
+          path: dist
       - name: Package
+        shell: pwsh
+        env:
+          ARCHIVE_NAME: flacura-windows-x86_64-${{ needs.build.outputs.label }}.zip
         run: |
-          for d in flacura-*; do
-            (cd "$d" && chmod +x flacura* && zip -9 "../$d.zip" flacura*)
-          done
+          Compress-Archive -LiteralPath dist/flacura.exe -DestinationPath $env:ARCHIVE_NAME
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: flacura-*.zip
+          fail_on_unmatched_files: true
