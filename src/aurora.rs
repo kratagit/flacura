@@ -3,7 +3,7 @@
 //! The shader is ported from the "Aurora" background of React Bits
 //! (https://reactbits.dev, MIT + Commons Clause). Pointer interaction is left
 //! out; height, brightness and speed are driven by the music instead, and a
-//! vertical mask keeps the light away from the text and controls.
+//! a bottom mask keeps the light away from the waveform and controls.
 
 use std::sync::Arc;
 
@@ -28,10 +28,7 @@ pub struct Params {
     pub opacity: f32,
     /// Intro progress (0..1).
     pub reveal: f32,
-    /// Fractions of the window height (from the top) where the readable
-    /// zones end / start: the light is dimmed above `clear_top` and below
-    /// `clear_bottom`.
-    pub clear_top: f32,
+    /// Fraction of the window height below which the light fades out.
     pub clear_bottom: f32,
 }
 
@@ -82,7 +79,7 @@ uniform float uBrightness;
 uniform int uLayers;
 uniform float uReveal;
 uniform float uOpacity;
-uniform vec2 uClear;
+uniform float uClearBottom;
 out vec4 outColor;
 
 vec3 permute(vec3 x) {
@@ -184,9 +181,8 @@ void main() {
     cover = 1.0 - (1.0 - cover) * (1.0 - alpha);
   }
 
-  // Keep the light away from the header and the waveform / controls.
-  float clearing = smoothstep(uClear.x - 0.04, uClear.x + 0.10, y)
-    * (1.0 - smoothstep(uClear.y - 0.10, uClear.y + 0.02, y));
+  // Waves reach the top edge; only the waveform/controls need a full-width mask.
+  float clearing = 1.0 - smoothstep(uClearBottom - 0.10, uClearBottom + 0.02, y);
   float mask = 0.08 + 0.92 * clearing;
 
   float fade = smootherstep(0.0, 0.7, uReveal) * uOpacity * mask;
@@ -247,7 +243,7 @@ impl Aurora {
                 layers: u("uLayers"),
                 reveal: u("uReveal"),
                 opacity: u("uOpacity"),
-                clear: u("uClear"),
+                clear: u("uClearBottom"),
             };
             Ok(Arc::new(Aurora { program, vao, loc }))
         }
@@ -299,7 +295,7 @@ impl Aurora {
             gl.uniform_1_i32(l.layers.as_ref(), 2);
             gl.uniform_1_f32(l.reveal.as_ref(), 1.0 - (1.0 - p.reveal).powi(3));
             gl.uniform_1_f32(l.opacity.as_ref(), p.opacity);
-            gl.uniform_2_f32(l.clear.as_ref(), p.clear_top, p.clear_bottom);
+            gl.uniform_1_f32(l.clear.as_ref(), p.clear_bottom);
             // egui leaves premultiplied-alpha blending on, which is what the
             // shader outputs.
             gl.bind_vertex_array(Some(self.vao));

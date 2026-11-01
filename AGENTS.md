@@ -21,10 +21,10 @@
 | `src/decode.rs` | Symphonia probing/decoding setup, metadata, quality labels and the shared `AUDIO_EXTENSIONS` list. |
 | `src/waveform.rs` | Background peak/RMS waveform generation, cancellation, progressive atomic buckets; up to six workers for known-length files and one for unknown lengths. |
 | `src/ui.rs` | eframe/egui window, custom drawing, keyboard/drop input, naturally sorted folder queue, transport, settings debounce and repaint scheduling. |
-| `src/motion.rs` | FFT analysis of played stereo samples, loudness energy and onset pulses driving the background. |
+| `src/motion.rs` | FFT analysis of played stereo samples, loudness energy/onsets and a separate visual envelope smoothing wave speed without delaying the initial response. |
 | `src/aurora.rs` | OpenGL shader and color conversion for the music-driven aurora background. |
 | `src/ipc.rs` | Per-user local IPC; subsequent launches forward a path or focus request to the running instance. Windows uses a named pipe. |
-| `src/config.rs` | Small `key=value` settings file; Windows path is `%APPDATA%\Flacura\config.txt`. Stores slider position and mute. |
+| `src/config.rs` | Small `key=value` settings file; Windows path is `%APPDATA%\Flacura\config.txt`. Stores slider position, mute and animated-background preference. |
 | `src/platform.rs` | File associations: Windows HKCU registration and Default Apps launch; platform-gated Linux/macOS implementations. |
 
 ## Important invariants
@@ -44,6 +44,12 @@
   in `ui.rs` applies the cubic gain curve and mute.
 - Use the existing wake callbacks and repaint scheduling. Do not replace
   event-driven idle behavior with an always-running render/poll loop.
+- The Settings window controls `animated_background` (default true for old
+  configs). When disabled, skip background FFT updates and shader drawing,
+  but preserve playback, the waveform seekbar and settings access when idle.
+- Keep the aurora anchored to the client area's top edge below the native
+  title bar. Smooth visual speed/decay separately from fast audio detection;
+  preserve the response-time tests rather than making the detector sluggish.
 - Keep lossless gold / lossy blue styling and the existing hi-res definition:
   lossless with more than 16 bits or more than 48 kHz.
 - When adding a format, review decoder support, `AUDIO_EXTENSIONS`, folder

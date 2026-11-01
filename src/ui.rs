@@ -16,7 +16,7 @@ use crate::audio::{Event, Player};
 use crate::aurora::{self, Aurora, STOPS};
 use crate::config::Config;
 use crate::decode::{TrackInfo, is_audio_file};
-use crate::motion::Motion;
+use crate::motion::{BackgroundMotion, Motion};
 use crate::waveform::{self, BUCKETS, Waveform};
 
 pub(crate) const BG: Color32 = Color32::from_rgb(14, 15, 18);
@@ -137,6 +137,7 @@ struct App {
     wave_anim_settling: bool,
     /// Music analysis that drives the background.
     motion: Motion,
+    background_motion: BackgroundMotion,
     /// Created on the second frame, so compiling the shader (~35 ms) doesn't
     /// delay the window; `None` without a usable GL context.
     aurora: Option<Arc<Aurora>>,
@@ -148,6 +149,7 @@ struct App {
     stops: [[f32; 3]; STOPS],
     seek_hold: Option<(f64, Instant)>,
     config: Config,
+    settings_open: bool,
     /// Settings changed and not yet written to disk.
     config_dirty: Option<Instant>,
     last_frame: Instant,
@@ -178,6 +180,7 @@ impl App {
             wave_anim: Vec::new(),
             wave_anim_settling: false,
             motion: Motion::new(),
+            background_motion: BackgroundMotion::default(),
             aurora: None,
             aurora_tried: false,
             frames: 0,
@@ -186,6 +189,7 @@ impl App {
             stops: AURORA_IDLE,
             seek_hold: None,
             config,
+            settings_open: false,
             config_dirty: None,
             last_frame: Instant::now(),
         }
@@ -469,6 +473,9 @@ impl App {
         if let Some(p) = dropped.into_iter().next() {
             self.open(p);
         }
+        if self.settings_open {
+            return;
+        }
         let [space, left, right, up, down, next, prev, stop, mute, shift] = keys;
         let step = if shift { 30.0 } else { 5.0 };
         if self.info.is_none() {
@@ -531,7 +538,7 @@ impl eframe::App for App {
         self.handle_input(&ctx);
 
         self.frames = self.frames.saturating_add(1);
-        if !self.aurora_tried && self.frames >= 2 {
+        if self.config.animated_background && !self.aurora_tried && self.frames >= 2 {
             self.aurora_tried = true;
             self.aurora = frame.gl().and_then(|gl| Aurora::new(gl).ok());
         }
@@ -542,10 +549,18 @@ impl eframe::App for App {
         let playing = self.info.is_some() && !paused;
         let (accent, light) = self.accent();
 
-        self.motion.update(&self.player, dt, playing);
+        if self.config.animated_background {
+            self.motion.update(&self.player, dt, playing);
+            self.background_motion
+                .update(dt, self.motion.energy, self.motion.pulse);
+        }
 
         let inner = full.shrink2(vec2(16.0, 14.0));
-        let header = Rect::from_min_size(inner.min, vec2(inner.width(), 40.0));
+        let top_bar = Rect::from_min_size(inner.min, vec2(inner.width(), 22.0));
+        let header = Rect::from_min_size(
+            pos2(inner.left(), top_bar.bottom() + 8.0),
+            vec2(inner.width(), 40.0),
+        );
         let controls = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 36.0), inner.max);
         let wave_h = (inner.height() * 0.22).clamp(34.0, 72.0);
         let wave_rect = Rect::from_min_max(
@@ -557,10 +572,10 @@ impl eframe::App for App {
             pos2(inner.right(), wave_rect.top() - 14.0),
         );
 
-        // The light stays out of the header and the waveform / controls.
-        let clear_top = (header.bottom() - full.top()) / full.height();
+        // The background starts at the top edge, below the native title bar.
         let clear_bottom = (wave_rect.top() - full.top()) / full.height();
-        let background_moving = self.draw_background(&painter, full, dt, clear_top, clear_bottom);
+        let background_moving = self.draw_background(&painter, full, dt, clear_bottom);
+        self.draw_settings(ui, top_bar);
 
         if self.info.is_none() {
             self.draw_empty(&painter, inner);
@@ -579,6 +594,13 @@ impl eframe::App for App {
             self.toggle_pause();
         }
 
+        // A local scrim keeps track text readable without hiding the waves
+        // across the whole upper part of the window.
+        painter.rect_filled(
+            header.expand2(vec2(6.0, 4.0)),
+            6.0,
+            Color32::from_rgba_unmultiplied(14, 15, 18, 100),
+        );
         self.draw_header(&painter, header, ctx.input(|i| i.time) as f32, playing);
         self.draw_waveform(ui, &painter, wave_rect, (accent, light), dt);
         let dragging = self.draw_controls(ui, &painter, controls, accent, light);
@@ -614,6 +636,33 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn draw_settings(&mut self, ui: &mut egui::Ui, top_bar: Rect) {
+        let button = Rect::from_min_size(
+            pos2(top_bar.right() - 80.0, top_bar.top()),
+            vec2(80.0, top_bar.height()),
+        );
+        if ui.put(button, egui::Button::new("Settings")).clicked() {
+            self.settings_open = !self.settings_open;
+        }
+        let mut open = self.settings_open;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                if ui
+                    .checkbox(&mut self.config.animated_background, "Animated background")
+                    .changed()
+                {
+                    self.config_dirty = Some(Instant::now());
+                    self.motion = Motion::new();
+                    self.background_motion = BackgroundMotion::default();
+                }
+                ui.label("Show waves that react to the music.");
+            });
+        self.settings_open = open;
+    }
+
     fn accent(&self) -> (Color32, Color32) {
         match &self.info {
             Some(i) if i.lossless => (GOLD, GOLD_LIGHT),
@@ -756,10 +805,12 @@ impl App {
         p: &egui::Painter,
         full: Rect,
         dt: f32,
-        clear_top: f32,
         clear_bottom: f32,
     ) -> bool {
         p.rect_filled(full, 0.0, BG);
+        if !self.config.animated_background {
+            return false;
+        }
         // Colors follow the track's quality, blending over ~0.5 s.
         let want = match &self.info {
             Some(i) if i.lossless => AURORA_GOLD,
@@ -782,9 +833,9 @@ impl App {
             return !self.aurora_tried;
         };
         // Loud music: fast, tall, bright. Quiet music: slow, low, dim.
-        let m = &self.motion;
+        let m = &self.background_motion;
         let e = m.energy;
-        self.clock += dt * (0.3 + 9.0 * e * e) * (1.0 + 2.5 * m.pulse);
+        self.clock += dt * m.speed;
         self.intro = (self.intro + dt / 2.4).min(1.0);
         aurora.paint(
             p,
@@ -793,18 +844,21 @@ impl App {
                 time: self.clock,
                 stops: self.stops,
                 amplitude: 0.6 + 1.4 * e,
-                blend: 0.25,
+                blend: 0.4,
                 // The wavy edge comes down into view as the music swells.
                 height: 0.16 + 0.42 * e + 0.14 * m.pulse,
                 glow: 0.3 + 0.7 * m.pulse,
                 brightness: 0.25 + 0.6 * e + 0.5 * m.pulse,
                 opacity: 0.45,
                 reveal: self.intro,
-                clear_top,
                 clear_bottom,
             },
         );
-        m.is_moving() || self.intro < 1.0 || blending
+        self.motion.is_moving()
+            || m.energy > 0.005
+            || m.pulse > 0.005
+            || self.intro < 1.0
+            || blending
     }
 
     fn draw_waveform(

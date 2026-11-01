@@ -21,6 +21,38 @@ const F_HI: f32 = 12_000.0;
 const QUIET_DB: f32 = -42.0;
 const LOUD_DB: f32 = -12.0;
 
+/// Smooth visual motion independently of the fast audio/onset detector.
+pub struct BackgroundMotion {
+    pub energy: f32,
+    pub pulse: f32,
+    pub speed: f32,
+}
+
+impl Default for BackgroundMotion {
+    fn default() -> Self {
+        Self {
+            energy: 0.0,
+            pulse: 0.0,
+            speed: 0.3,
+        }
+    }
+}
+
+impl BackgroundMotion {
+    pub fn update(&mut self, dt: f32, energy: f32, pulse: f32) {
+        let follow = |value: &mut f32, target: f32, attack: f32, release: f32| {
+            let tau = if target > *value { attack } else { release };
+            *value += (target - *value) * (1.0 - (-dt / tau).exp());
+        };
+        // Keep the first response within one or two frames, then soften the
+        // tail. Beats brighten/reshape the waves without jerking their phase.
+        follow(&mut self.energy, energy, 0.018, 0.095);
+        follow(&mut self.pulse, pulse, 0.020, 0.16);
+        let speed = 0.3 + 9.0 * self.energy * self.energy + 3.0 * self.pulse;
+        follow(&mut self.speed, speed, 0.055, 0.14);
+    }
+}
+
 pub struct Motion {
     rate: u32,
     fft_len: usize,
@@ -288,6 +320,23 @@ fn mean_sd(v: &VecDeque<f32>) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_reacts_quickly_without_an_instant_speed_jump() {
+        let mut background = BackgroundMotion::default();
+        background.update(1.0 / 60.0, 1.0, 1.0);
+        assert!(background.energy > 0.5);
+        assert!(background.speed > 0.3 && background.speed < 3.0);
+        for _ in 0..2 {
+            background.update(1.0 / 60.0, 1.0, 1.0);
+        }
+        assert!(background.energy > 0.9, "must respond within 50 ms");
+        for _ in 0..120 {
+            background.update(1.0 / 60.0, 0.0, 0.0);
+        }
+        assert!(background.energy < 0.001 && background.pulse < 0.001);
+        assert!((background.speed - 0.3).abs() < 0.001);
+    }
 
     const RATE: u32 = 44_100;
 

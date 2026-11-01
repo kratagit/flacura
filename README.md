@@ -11,8 +11,9 @@ and releases for those platforms are deferred until needed.
   player (gold for lossless, blue for lossy) and follows the loudness of what
   is playing: quiet passages leave it low, dim and nearly still, loud ones
   make it brighter, reach further down and flow several times faster, and
-  beats give it a short flash. It stays out from behind the title and the
-  controls, so they remain readable. When paused it comes to rest.
+  beats give it a short flash. Waves start directly below the window title
+  bar, with smooth motion and fast audio response. Track text and controls
+  remain readable. When paused it comes to rest. Disable it in **Settings**.
 - **Waveform seekbar.** The whole track is drawn as a waveform that grows in
   while it's decoded in the background, on several threads (a 3-minute FLAC
   takes about 35 ms). Click or drag to seek.
@@ -49,7 +50,12 @@ decoders).
 
 ## Settings
 
-Volume and mute are saved automatically to:
+Open **Settings** in the upper-right corner and toggle **Animated background**
+to enable or disable the music-reactive waves. The change takes effect
+immediately and is remembered after restarting. Disabling the background also
+skips its shader drawing and audio analysis; the waveform seekbar stays usable.
+
+Volume, mute and the animated-background preference are saved automatically to:
 
 - Windows: `%APPDATA%\Flacura\config.txt`
 - Linux: `$XDG_CONFIG_HOME/flacura/config.txt` (usually `~/.config/flacura/config.txt`)
