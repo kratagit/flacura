@@ -98,49 +98,24 @@ sudo apt install pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libgl
 - GNU (`x86_64-pc-windows-gnu`): needs MinGW-w64 binutils (`dlltool`) on
   `PATH`, e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT`.
 
-### GitHub Actions builds
+### Automatic Windows releases
 
-Builds run only when changes reach `main`, normally after merging a PR.
-Branch pushes, PRs and version tags do not start builds. The **releases**
-workflow runs formatting, Clippy, tests and one Windows (x86_64) release build.
+Merge changes into `main`. GitHub checks the code, builds the Windows x86_64
+application once, and publishes **flacura.exe** directly to
+[GitHub Releases](https://github.com/kratagit/flacura/releases/latest).
+Download the EXE and run it; no ZIP extraction is needed.
 
-To download a binary, open a successful run in the repository's **Actions**
-tab and select the matching `flacura-*` artifact. Artifacts are kept for 14 days.
-When Release Please creates a release, the same build is packaged as a Windows
-ZIP archive and attached to GitHub Releases without recompiling.
+Branch pushes and PRs do not start builds. There is no separate release PR,
+manual tag or version-editing step. A failed check prevents publication.
 
-### Versioning
+Each release automatically increments the patch version (`0.1.0` → `0.1.1`
+→ `0.1.2`). The build embeds that version in the window title. Cargo.toml is
+used as a minimum version baseline; CI updates its local copy and Cargo.lock
+before compiling without creating additional commits. Retrying a tagged
+commit reuses its release version. Release tags point to the source commit.
 
-The version is defined in `Cargo.toml` and embedded in the window title at
-compile time. Releases use `MAJOR.MINOR.PATCH` and are managed automatically
-by Release Please. The first release is `0.1.0`.
-
-Development artifacts include the version and commit, for example
-`flacura-windows-x86_64-v0.1.0-dev.abdbfab`. Release artifacts use `v0.1.0`.
-
-Use Conventional Commits, preferably by choosing **Squash and merge** and
-setting the final commit title:
-
-- `fix: repair seeking` increments PATCH (`0.1.0` → `0.1.1`).
-- `feat: support a new audio format` increments MINOR (`0.1.0` → `0.2.0`).
-- `feat!: change an incompatible interface` increments MAJOR.
-- `docs:`, `ci:` and `chore:` alone do not create a new release.
-
-After changes reach `main`, Release Please opens or updates a release PR
-containing the new versions in `Cargo.toml` and
-`Cargo.lock`, and a generated `CHANGELOG.md`. Merge that PR when ready to ship.
-The bot creates the tag and GitHub Release. That main run builds the exact
-tagged commit once, and `publish.yml` packages the existing artifact and attaches
-the Windows ZIP archive after checks pass. No manual version edits or tags are
-needed. Merging a regular change and later merging its release PR each cause
-one build; there are no builds while either PR is open.
-
-This uses the built-in `GITHUB_TOKEN`; no personal access token is required.
-Repository settings must allow GitHub Actions to create pull requests.
-Bot-created PRs/tags do not trigger builds with this token; the main workflow
-calls the build and publishing workflows directly. A Release Please error
-does not block the normal Windows build. If publishing fails, rerun the failed
-jobs in **Actions**.
+If a run fails, use **Re-run failed jobs** in Actions. No personal access token
+or permission to create pull requests is needed.
 
 ### Tests
 

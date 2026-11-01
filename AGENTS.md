@@ -92,33 +92,24 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
 
 ## GitHub Actions and releases
 
-- `releases` is triggered only by pushes to `main` (normally after merging).
-  Branch pushes, PRs and tag pushes do not trigger builds. Do not add them back
-  without a user request; this is primarily a personal Windows application.
-- `build.yml` is reusable only. It checks formatting, Clippy, tests and release
-  compilation once per main run, with `contents: read`, and exports its label.
-- Development artifacts use `flacura-windows-x86_64-vVERSION-dev.COMMIT` and
-  expire after 14 days. Releases attach `flacura-windows-x86_64-vVERSION.zip`
-  containing `flacura.exe`; no installer is currently produced.
-- Use Conventional Commits and preserve them in squash-merge titles: `fix:`
-  bumps PATCH, `feat:` bumps MINOR, and `feat!:`/`BREAKING CHANGE:` bumps MAJOR.
-  `docs:`, `ci:` and `chore:` alone do not request a release.
-- Release Please uses `release-please-config.json` and
-  `.release-please-manifest.json`. It creates a PR updating `Cargo.toml`,
-  `Cargo.lock`, the manifest and `CHANGELOG.md`. The initial release is 0.1.0.
-  Do not bump versions or create/push release tags for routine changes.
-- On main, the bot first prepares/updates the release PR, or creates a release
-  when that PR was merged. The build then uses the released SHA/tag if present,
-  otherwise the triggering main SHA. A bot failure must not block the build.
-- For a new release, `publish.yml` downloads the artifact from the same run,
-  packages it and uploads the ZIP after the build passes. It never recompiles.
-- Keep write permissions in the publishing/release workflows. A reusable
-  workflow cannot request more permissions than its caller, even for skipped
-  jobs. Do not put a `contents: write` job inside the read-only build workflow.
-- The built-in `GITHUB_TOKEN` cannot trigger new workflows through bot-created
-  PRs/tags. Keep the direct reusable workflow calls. The tag must match the
-  Cargo version and lockfile; release artifacts must come from the tagged SHA.
-- GitHub Actions must be allowed to create PRs in repository settings. Inspect
-  the current setting if the bot fails; do not store personal tokens or assume
-  the setting is enabled. Rerun failed publishing jobs to retry asset upload.
+- There is one workflow, `.github/workflows/build.yml`, triggered only by
+  pushes to `main` (normally after merging). Branches, PRs and tags do not
+  trigger builds. This is primarily a personal Windows application.
+- Every main run checks formatting, Clippy and tests, compiles once, and
+  publishes `flacura.exe` directly to GitHub Releases. Do not add ZIP archives,
+  installers, release PRs or manual tag/version steps unless requested.
+- `.github/scripts/prepare-release.ps1` chooses the next patch version from
+  existing `vMAJOR.MINOR.PATCH` tags, using Cargo.toml as a minimum baseline.
+  A retry reuses the version already tagged at the same commit.
+- The script adjusts only the CI checkout's Cargo.toml and Cargo.lock before
+  compiling, so the title embeds the actual release version. It does not push
+  version-bump commits. Keep both tracked Cargo versions consistent locally.
+- Releases are ordinary published releases, named `Flacura vVERSION`, tagged
+  at the triggering commit. The EXE is uploaded only after all checks pass.
+- Conventional Commit titles remain useful, but every main push releases;
+  the commit type does not control version bumps. No Release Please is used.
+- Workflow concurrency serializes releases to prevent version collisions.
+  Keep full tag history in checkout and `contents: write` for publication.
+- Rerun failed jobs to retry a release. Do not store personal tokens; the
+  built-in GITHUB_TOKEN is sufficient and does not require PR permissions.
 - Keep `CLAUDE.md` as a thin import of this file so instructions do not diverge.
