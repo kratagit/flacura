@@ -47,7 +47,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: Flacura v${{ steps.version.outputs.version }} — Windows x86_64
+          name: v${{ steps.version.outputs.version }}
           target_commitish: ${{ github.sha }}
           files: target/release/flacura-v${{ steps.version.outputs.version }}-windows-x86_64.exe
           fail_on_unmatched_files: true
