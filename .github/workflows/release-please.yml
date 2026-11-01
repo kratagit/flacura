@@ -3,18 +3,12 @@ name: releases
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    uses: ./.github/workflows/build.yml
-
   release-please:
-    if: github.ref == 'refs/heads/main'
-    needs: verify
     runs-on: windows-latest
     concurrency:
       group: release-please-main
@@ -34,12 +28,21 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  publish:
+  build:
     needs: release-please
+    # A bot configuration/API error must not block the user's Windows build.
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.release-please.outputs.sha || github.sha }}
+      release_tag: ${{ needs.release-please.outputs.tag_name }}
+
+  publish:
+    needs: [release-please, build]
     if: needs.release-please.outputs.release_created == 'true'
     uses: ./.github/workflows/publish.yml
     permissions:
       contents: write
     with:
-      ref: ${{ needs.release-please.outputs.sha }}
+      artifact_label: ${{ needs.build.outputs.label }}
       release_tag: ${{ needs.release-please.outputs.tag_name }}
