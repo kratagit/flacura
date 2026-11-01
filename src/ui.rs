@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align2, Color32, FontId, Key, Mesh, Pos2, Rect, Sense, Stroke, TextFormat,
+    self, Align2, Color32, FontId, Key, Mesh, Pos2, Rect, Sense, Stroke, StrokeKind, TextFormat,
     ViewportCommand, pos2, text::LayoutJob, text::TextWrapping, vec2,
 };
 use interprocess::local_socket::Listener;
@@ -20,7 +20,6 @@ use crate::motion::{BackgroundMotion, Motion};
 use crate::waveform::{self, BUCKETS, Waveform};
 
 pub(crate) const BG: Color32 = Color32::from_rgb(14, 15, 18);
-const PANEL: Color32 = Color32::from_rgb(22, 24, 29);
 const TEXT: Color32 = Color32::from_rgb(232, 234, 238);
 const DIM: Color32 = Color32::from_rgb(128, 133, 145);
 const FAINT: Color32 = Color32::from_rgb(52, 56, 66);
@@ -612,25 +611,27 @@ impl eframe::App for App {
         if self.config.animated_background {
             self.motion.update(&self.player, dt, playing);
             let bass_driven = 0.85 * self.motion.bass_energy + 0.15 * self.motion.energy;
+            let tempo = if self.config.tempo_adaptive_speed {
+                self.motion.tempo
+            } else {
+                0.0
+            };
             self.background_motion
-                .update(dt, bass_driven, self.motion.pulse);
+                .update(dt, bass_driven, self.motion.pulse, tempo);
         }
 
-        let inner = full.shrink2(vec2(24.0, 18.0));
-        let settings_center = pos2(inner.right() - 14.0, inner.top() + 30.0);
-        let header = Rect::from_min_size(inner.min, vec2(inner.width() - 42.0, 68.0));
-        let controls = Rect::from_min_max(
-            pos2(inner.left() + 14.0, inner.bottom() - 52.0),
-            pos2(inner.right() - 14.0, inner.bottom()),
-        );
+        let inner = full.shrink2(vec2(14.0, 12.0));
+        let header = Rect::from_min_size(inner.min, vec2(inner.width() - 36.0, 44.0));
+        let settings_center = pos2(inner.right() - 14.0, header.top() + 14.0);
+        let controls = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 40.0), inner.max);
         let wave_h = (inner.height() * 0.20).clamp(44.0, 72.0);
         let wave_rect = Rect::from_min_max(
-            pos2(inner.left() + 14.0, controls.top() - 28.0 - wave_h),
-            pos2(inner.right() - 14.0, controls.top() - 28.0),
+            pos2(inner.left(), controls.top() - 14.0 - wave_h),
+            pos2(inner.right(), controls.top() - 14.0),
         );
         let middle = Rect::from_min_max(
-            pos2(inner.left(), header.bottom() + 12.0),
-            pos2(inner.right(), wave_rect.top() - 14.0),
+            pos2(inner.left(), header.bottom() + 8.0),
+            pos2(inner.right(), wave_rect.top() - 12.0),
         );
 
         // The background starts at the top edge, below the native title bar.
@@ -659,9 +660,7 @@ impl eframe::App for App {
         title_painter.set_opacity(self.track_reveal);
         self.draw_header(
             &title_painter,
-            header
-                .shrink2(vec2(16.0, 19.0))
-                .translate(vec2(0.0, (1.0 - self.track_reveal) * 7.0)),
+            header.translate(vec2(0.0, (1.0 - self.track_reveal) * 7.0)),
             ctx.input(|i| i.time) as f32,
             playing,
         );
@@ -669,8 +668,14 @@ impl eframe::App for App {
         let dragging = self.draw_controls(ui, &painter, controls, accent, light);
 
         if let Some(e) = self.error.as_ref().or(self.device_error.as_ref()) {
-            let r = Rect::from_center_size(middle.center(), vec2(middle.width(), 24.0));
-            painter.rect_filled(r, 6.0, Color32::from_rgba_unmultiplied(120, 30, 30, 220));
+            let r = Rect::from_center_size(middle.center(), vec2(middle.width(), 26.0));
+            draw_glass_pill(
+                &painter,
+                r,
+                8.0,
+                Color32::from_rgba_unmultiplied(110, 26, 30, 175),
+                Color32::from_rgba_unmultiplied(255, 130, 120, 48),
+            );
             painter.text(
                 r.center(),
                 Align2::CENTER_CENTER,
@@ -701,6 +706,9 @@ impl eframe::App for App {
 
 impl App {
     fn draw_settings(&mut self, ui: &mut egui::Ui, center: Pos2) {
+        if self.settings_open && ui.input(|i| i.key_pressed(Key::Escape)) {
+            self.settings_open = false;
+        }
         let response = button(
             ui,
             ui.painter(),
@@ -724,60 +732,133 @@ impl App {
             return;
         }
         let full = ui.max_rect();
-        let width = 320.0f32.min(full.width() - 32.0);
+        let width = 304.0f32.min(full.width() - 28.0);
         let origin = pos2(
-            full.right() - width - 16.0 + (1.0 - reveal) * 8.0,
-            full.top() + 16.0,
+            full.right() - width - 14.0,
+            center.y + 20.0 - (1.0 - reveal) * 6.0,
         );
+        let (accent, light) = self.accent();
+        let lossless = self.info.as_ref().is_some_and(|i| i.lossless);
+        let (glass_fill, glass_border, glass_sheen) = if lossless {
+            (
+                Color32::from_rgba_unmultiplied(24, 21, 18, 195),
+                Color32::from_rgba_unmultiplied(255, 222, 140, 42),
+                Color32::from_rgba_unmultiplied(255, 235, 180, 18),
+            )
+        } else {
+            (
+                Color32::from_rgba_unmultiplied(15, 20, 32, 195),
+                Color32::from_rgba_unmultiplied(190, 215, 255, 42),
+                Color32::from_rgba_unmultiplied(210, 230, 255, 18),
+            )
+        };
+        let mut panel_rect = Rect::NOTHING;
         egui::Area::new(egui::Id::new("fixed-settings"))
             .order(egui::Order::Foreground)
             .fixed_pos(origin)
             .movable(false)
             .show(&ctx, |ui| {
                 ui.set_opacity(reveal);
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_unmultiplied(17, 21, 29, 250))
-                    .corner_radius(12)
-                    .inner_margin(18)
+                let frame_resp = egui::Frame::new()
+                    .fill(glass_fill)
+                    .stroke(Stroke::new(1.0, glass_border))
+                    .corner_radius(16)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 10],
+                        blur: 28,
+                        spread: 0,
+                        color: Color32::from_black_alpha(120),
+                    })
+                    .inner_margin(16)
                     .show(ui, |ui| {
-                        ui.set_width(width - 36.0);
+                        ui.set_width(width - 32.0);
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Settings").size(18.0));
+                            ui.label(
+                                egui::RichText::new("Settings")
+                                    .size(15.5)
+                                    .color(TEXT)
+                                    .strong(),
+                            );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui
-                                        .add(egui::Button::new("×").frame(false))
-                                        .on_hover_text("Close settings")
-                                        .clicked()
-                                    {
+                                    let (close_r, close_resp) =
+                                        ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                                    let close_hover = ui.ctx().animate_bool_with_time(
+                                        close_resp.id.with("hover"),
+                                        close_resp.hovered(),
+                                        0.14,
+                                    );
+                                    if close_hover > 0.01 {
+                                        ui.painter().circle_filled(
+                                            close_r.center(),
+                                            11.0,
+                                            Color32::from_white_alpha((26.0 * close_hover) as u8),
+                                        );
+                                    }
+                                    let c = close_r.center();
+                                    let d = 3.8;
+                                    let col = if close_resp.hovered() { TEXT } else { DIM };
+                                    ui.painter().line_segment(
+                                        [c + vec2(-d, -d), c + vec2(d, d)],
+                                        Stroke::new(1.3, col),
+                                    );
+                                    ui.painter().line_segment(
+                                        [c + vec2(-d, d), c + vec2(d, -d)],
+                                        Stroke::new(1.3, col),
+                                    );
+                                    if close_resp.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if close_resp.on_hover_text("Close settings").clicked() {
                                         self.settings_open = false;
                                     }
                                 },
                             );
                         });
                         ui.add_space(10.0);
-                        let accent = self.accent().0;
                         if setting_toggle(
                             ui,
                             "Animated background",
                             &mut self.config.animated_background,
                             accent,
+                            light,
                         ) {
                             self.config_dirty = Some(Instant::now());
                             self.motion = Motion::new();
                             self.background_motion = BackgroundMotion::default();
                         }
+                        if self.config.animated_background {
+                            ui.add_space(6.0);
+                            if setting_toggle(
+                                ui,
+                                "Adapt speed to tempo",
+                                &mut self.config.tempo_adaptive_speed,
+                                accent,
+                                light,
+                            ) {
+                                self.config_dirty = Some(Instant::now());
+                            }
+                        }
                         #[cfg(windows)]
                         {
-                            ui.add_space(12.0);
-                            if ui
-                                .add_enabled(
-                                    self.association_task.is_none(),
-                                    egui::Button::new("Set default player").frame(false),
-                                )
-                                .clicked()
-                            {
+                            ui.add_space(10.0);
+                            let sep_y = ui.cursor().top();
+                            ui.painter().line_segment(
+                                [
+                                    pos2(ui.max_rect().left(), sep_y),
+                                    pos2(ui.max_rect().right(), sep_y),
+                                ],
+                                Stroke::new(1.0, Color32::from_white_alpha(16)),
+                            );
+                            ui.add_space(10.0);
+                            if glass_action_button(
+                                ui,
+                                "Set default player",
+                                self.association_task.is_none(),
+                                accent,
+                                light,
+                            ) {
                                 let (tx, rx) = mpsc::channel();
                                 let ctx = ui.ctx().clone();
                                 self.association_task = Some(rx);
@@ -788,8 +869,10 @@ impl App {
                                 });
                             }
                             if self.association_task.is_some() {
+                                ui.add_space(4.0);
                                 ui.spinner();
                             }
+                            ui.add_space(4.0);
                             match &self.association_status {
                                 Some(Err(error)) => {
                                     ui.colored_label(Color32::from_rgb(250, 145, 135), error);
@@ -799,14 +882,33 @@ impl App {
                                         egui::RichText::new(
                                             "Confirm the choice in Windows Settings.",
                                         )
-                                        .size(12.0)
+                                        .size(11.5)
                                         .color(DIM),
                                     );
                                 }
                             }
                         }
                     });
+                panel_rect = frame_resp.response.rect;
+                // Subtle liquid-glass specular sheen along the top edge.
+                let sheen = Rect::from_min_max(
+                    pos2(panel_rect.left() + 14.0, panel_rect.top() + 1.0),
+                    pos2(panel_rect.right() - 14.0, panel_rect.top() + 2.0),
+                );
+                ui.painter().rect_filled(sheen, 1.0, glass_sheen);
             });
+        // Close when clicking outside the panel and gear button.
+        if self.settings_open
+            && !response.clicked()
+            && ctx.input(|i| {
+                i.pointer.primary_clicked()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| !panel_rect.contains(p))
+            })
+        {
+            self.settings_open = false;
+        }
     }
 
     fn accent(&self) -> (Color32, Color32) {
@@ -846,44 +948,29 @@ impl App {
     fn draw_header(&self, p: &egui::Painter, r: Rect, time: f32, playing: bool) {
         let Some(info) = &self.info else { return };
 
-        // Quality badge (right aligned).
+        // Quality label (right aligned, no pill background).
         let label = info.quality_label();
         let badge_font = FontId::proportional(11.5);
-        let (fg, fill) = if info.lossless {
-            (
-                GOLD_LIGHT,
-                Color32::from_rgba_unmultiplied(236, 186, 76, 16),
-            )
-        } else {
-            (DIM, Color32::from_black_alpha(25))
-        };
-        let g = p.layout_no_wrap(label, badge_font.clone(), fg);
-        let mut bw = g.size().x + 16.0;
-        let hires_w = if info.hires() { 46.0 } else { 0.0 };
-        bw += hires_w;
-        let badge = Rect::from_min_size(pos2(r.right() - bw, r.top() + 1.0), vec2(bw, 20.0));
+        let fg = if info.lossless { GOLD_LIGHT } else { DIM };
+        let g = p.layout_no_wrap(label, badge_font, fg);
+        let hires_w = if info.hires() { 44.0 } else { 0.0 };
+        let bw = g.size().x + hires_w;
+        let badge = Rect::from_min_size(pos2(r.right() - bw, r.top() + 3.0), vec2(bw, 16.0));
         if info.hires() {
-            // Pulsing golden glow.
-            // Pulses while playing; steady (and free) while paused.
+            let chip = Rect::from_min_size(pos2(badge.left(), badge.top() + 1.0), vec2(38.0, 14.0));
             let pulse = if playing {
                 0.5 + 0.5 * (time * 2.2).sin()
             } else {
                 0.6
             };
-            for k in 1..=5 {
-                let a = (pulse * 26.0 / k as f32) as u8;
+            for k in 1..=4 {
+                let a = (pulse * 22.0 / k as f32) as u8;
                 p.rect_filled(
-                    badge.expand(k as f32 * 1.6),
-                    7.0 + k as f32,
+                    chip.expand(k as f32 * 1.4),
+                    4.0 + k as f32,
                     Color32::from_rgba_unmultiplied(236, 186, 76, a),
                 );
             }
-        }
-        p.rect_filled(badge, 6.0, fill);
-        let mut x = badge.left() + 8.0;
-        if info.hires() {
-            let chip =
-                Rect::from_min_size(pos2(x - 4.0, badge.top() + 3.0), vec2(hires_w - 4.0, 14.0));
             p.rect_filled(chip, 4.0, GOLD);
             p.text(
                 chip.center(),
@@ -892,9 +979,12 @@ impl App {
                 FontId::proportional(9.5),
                 GOLD_DARK,
             );
-            x += hires_w;
         }
-        p.galley(pos2(x, badge.center().y - g.size().y / 2.0), g, fg);
+        p.galley(
+            pos2(r.right() - g.size().x, badge.center().y - g.size().y / 2.0),
+            g,
+            fg,
+        );
 
         // Title and artist, truncated to the space left of the badge.
         let max_w = (badge.left() - r.left() - 12.0).max(40.0);
@@ -1124,12 +1214,18 @@ impl App {
             let t = frac_at(hx) * d;
             let s = fmt_time(t);
             let g = p.layout_no_wrap(s, FontId::proportional(11.0), TEXT);
-            let w = g.size().x + 10.0;
+            let w = g.size().x + 12.0;
             let x = (hx - w / 2.0).clamp(r.left(), r.right() - w);
-            let tip = Rect::from_min_size(pos2(x, r.top() - 22.0), vec2(w, 17.0));
-            p.rect_filled(tip, 4.0, PANEL);
+            let tip = Rect::from_min_size(pos2(x, r.top() - 22.0), vec2(w, 18.0));
+            draw_glass_pill(
+                p,
+                tip,
+                6.0,
+                Color32::from_rgba_unmultiplied(16, 20, 30, 195),
+                Color32::from_white_alpha(32),
+            );
             p.galley(
-                pos2(tip.left() + 5.0, tip.center().y - g.size().y / 2.0),
+                pos2(tip.left() + 6.0, tip.center().y - g.size().y / 2.0),
                 g,
                 TEXT,
             );
@@ -1272,12 +1368,18 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             let label = format!("{:.0}%", level * 100.0);
             let g = p.layout_no_wrap(label, FontId::proportional(10.5), TEXT);
-            let w = g.size().x + 10.0;
+            let w = g.size().x + 12.0;
             let x = (fill_x - w / 2.0).clamp(slider.left() - 20.0, r.right() - w);
-            let tip = Rect::from_min_size(pos2(x, slider.top() - 20.0), vec2(w, 16.0));
-            p.rect_filled(tip, 4.0, PANEL);
+            let tip = Rect::from_min_size(pos2(x, slider.top() - 21.0), vec2(w, 17.0));
+            draw_glass_pill(
+                p,
+                tip,
+                6.0,
+                Color32::from_rgba_unmultiplied(16, 20, 30, 195),
+                Color32::from_white_alpha(32),
+            );
             p.galley(
-                pos2(tip.left() + 5.0, tip.center().y - g.size().y / 2.0),
+                pos2(tip.left() + 6.0, tip.center().y - g.size().y / 2.0),
                 g,
                 TEXT,
             );
@@ -1296,12 +1398,38 @@ fn waveform_levels(peak: f32, rms: f32, gain: f32) -> (f32, f32) {
     (outer, core)
 }
 
-fn setting_toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, accent: Color32) -> bool {
+fn draw_glass_pill(p: &egui::Painter, rect: Rect, radius: f32, fill: Color32, border: Color32) {
+    p.rect(
+        rect,
+        radius,
+        fill,
+        Stroke::new(1.0, border),
+        StrokeKind::Inside,
+    );
+    let inset = (radius * 0.65).max(3.0);
+    if rect.width() > inset * 2.0 {
+        p.line_segment(
+            [
+                pos2(rect.left() + inset, rect.top() + 1.0),
+                pos2(rect.right() - inset, rect.top() + 1.0),
+            ],
+            Stroke::new(1.0, Color32::from_white_alpha(20)),
+        );
+    }
+}
+
+fn setting_toggle(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut bool,
+    accent: Color32,
+    light: Color32,
+) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label(label);
+        ui.label(egui::RichText::new(label).color(TEXT).size(13.5));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
+            let (rect, mut response) = ui.allocate_exact_size(vec2(38.0, 22.0), Sense::click());
             if response.clicked() {
                 *value = !*value;
                 response.mark_changed();
@@ -1311,26 +1439,102 @@ fn setting_toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, accent: Colo
                 egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *value, label)
             });
             let t = ui.ctx().animate_bool_with_time(response.id, *value, 0.14);
-            ui.painter()
-                .rect_filled(rect, 10.0, Color32::from_white_alpha(22));
+            let hover = ui.ctx().animate_bool_with_time(
+                response.id.with("hover"),
+                response.hovered(),
+                0.14,
+            );
             ui.painter().rect_filled(
                 rect,
-                10.0,
+                11.0,
+                Color32::from_white_alpha((18.0 + 10.0 * hover) as u8),
+            );
+            ui.painter().rect_filled(
+                rect,
+                11.0,
                 Color32::from_rgba_unmultiplied(
                     accent.r(),
                     accent.g(),
                     accent.b(),
-                    (t * 180.0) as u8,
+                    (t * 165.0) as u8,
                 ),
             );
-            ui.painter().circle_filled(
-                pos2(rect.left() + 10.0 + t * 14.0, rect.center().y),
-                6.0,
-                TEXT,
+            let border = Color32::from_rgba_unmultiplied(
+                light.r(),
+                light.g(),
+                light.b(),
+                (28.0 + 48.0 * t + 20.0 * hover) as u8,
             );
+            ui.painter()
+                .rect_stroke(rect, 11.0, Stroke::new(1.0, border), StrokeKind::Inside);
+            let knob_x = rect.left() + 11.0 + t * 16.0;
+            let knob_c = pos2(knob_x, rect.center().y);
+            ui.painter()
+                .circle_filled(knob_c + vec2(0.0, 1.0), 7.5, Color32::from_black_alpha(60));
+            ui.painter().circle_filled(knob_c, 7.5, TEXT);
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
         });
     });
     changed
+}
+
+#[cfg(windows)]
+fn glass_action_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    enabled: bool,
+    accent: Color32,
+    light: Color32,
+) -> bool {
+    let desired = vec2(ui.available_width(), 32.0);
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(desired, sense);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let hovered = enabled && response.hovered();
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let hover = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("hover"), hovered, 0.14);
+    let press = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("press"), pressed, 0.08);
+    let fill = Color32::from_rgba_unmultiplied(
+        accent.r(),
+        accent.g(),
+        accent.b(),
+        (18.0 + 26.0 * hover + 14.0 * press) as u8,
+    );
+    let border = Color32::from_rgba_unmultiplied(
+        light.r(),
+        light.g(),
+        light.b(),
+        (36.0 + 48.0 * hover) as u8,
+    );
+    draw_glass_pill(ui.painter(), rect, 9.0, fill, border);
+    let fg = if !enabled {
+        DIM
+    } else if hovered {
+        light
+    } else {
+        TEXT
+    };
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(13.0),
+        fg,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    enabled && response.clicked()
 }
 
 fn waveform_gain(rms: &mut [f32]) -> f32 {
@@ -1384,23 +1588,51 @@ fn button(
         .animate_bool_with_time(ui.id().with((id, "press")), pressed, 0.08);
     let animated_rad = rad * (1.0 + hover * 0.06 - press * 0.10);
     let fg = match filled {
-        Some((fill, hover)) => {
+        Some((fill, hover_fill)) => {
             for k in (1..=4).rev() {
                 p.circle_filled(
                     c,
                     animated_rad + k as f32 * 2.5,
-                    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 8),
+                    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 10),
                 );
             }
-            p.circle_filled(c, animated_rad, if hovered { hover } else { fill });
-            BG
-        }
-        None => {
+            let base = if hovered { hover_fill } else { fill };
             p.circle_filled(
                 c,
                 animated_rad,
-                Color32::from_white_alpha((24.0 * hover + 15.0 * press) as u8),
+                Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 230),
             );
+            p.circle_stroke(
+                c,
+                animated_rad - 0.5,
+                Stroke::new(
+                    1.0,
+                    Color32::from_rgba_unmultiplied(
+                        hover_fill.r(),
+                        hover_fill.g(),
+                        hover_fill.b(),
+                        140,
+                    ),
+                ),
+            );
+            BG
+        }
+        None => {
+            if hover > 0.01 || press > 0.01 {
+                p.circle_filled(
+                    c,
+                    animated_rad,
+                    Color32::from_white_alpha((22.0 * hover + 16.0 * press) as u8),
+                );
+                p.circle_stroke(
+                    c,
+                    animated_rad - 0.5,
+                    Stroke::new(
+                        1.0,
+                        Color32::from_white_alpha((38.0 * hover + 18.0 * press) as u8),
+                    ),
+                );
+            }
             if !enabled {
                 FAINT
             } else if matches!(icon, Icon::Settings) && !hovered {

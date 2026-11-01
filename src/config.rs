@@ -8,6 +8,8 @@ pub struct Config {
     pub volume: f32,
     pub muted: bool,
     pub animated_background: bool,
+    /// Adapts background wave speed and responsiveness to the track's tempo.
+    pub tempo_adaptive_speed: bool,
 }
 
 impl Default for Config {
@@ -16,6 +18,7 @@ impl Default for Config {
             volume: 1.0,
             muted: false,
             animated_background: true,
+            tempo_adaptive_speed: true,
         }
     }
 }
@@ -48,6 +51,11 @@ impl Config {
                         c.animated_background = enabled;
                     }
                 }
+                "tempo_adaptive_speed" => {
+                    if let Ok(enabled) = v.trim().parse() {
+                        c.tempo_adaptive_speed = enabled;
+                    }
+                }
                 _ => {}
             }
         }
@@ -64,8 +72,8 @@ impl Config {
 
     fn encode(&self) -> String {
         format!(
-            "volume={:.3}\nmuted={}\nanimated_background={}\n",
-            self.volume, self.muted, self.animated_background
+            "volume={:.3}\nmuted={}\nanimated_background={}\ntempo_adaptive_speed={}\n",
+            self.volume, self.muted, self.animated_background, self.tempo_adaptive_speed
         )
     }
 }
@@ -78,6 +86,7 @@ mod tests {
     fn old_settings_keep_background_enabled() {
         let config = Config::parse("volume=0.500\nmuted=true\n");
         assert!(config.animated_background);
+        assert!(config.tempo_adaptive_speed);
         assert_eq!(config.volume, 0.5);
         assert!(config.muted);
         assert!(Config::parse("animated_background=invalid").animated_background);
@@ -89,6 +98,7 @@ mod tests {
             volume: 0.375,
             muted: true,
             animated_background: false,
+            tempo_adaptive_speed: false,
         };
         assert_eq!(Config::parse(&config.encode()), config);
     }
