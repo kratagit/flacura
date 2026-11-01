@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align2, Color32, FontId, Key, Mesh, Pos2, Rect, Sense, Stroke, StrokeKind, TextFormat,
+    self, Align2, Color32, FontId, Key, Mesh, Pos2, Rect, Sense, Stroke, TextFormat,
     ViewportCommand, pos2, text::LayoutJob, text::TextWrapping, vec2,
 };
 use interprocess::local_socket::Listener;
@@ -50,6 +50,30 @@ const AURORA_IDLE: [[f32; 3]; STOPS] = [
     [0.23, 0.25, 0.33],
 ];
 
+/// Use Windows' native UI typeface without shipping a system-font asset.
+fn configure_fonts(ctx: &egui::Context) {
+    #[cfg(windows)]
+    {
+        let windows = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        if let Ok(bytes) = std::fs::read(windows.join("Fonts/segoeui.ttf")) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts
+                .font_data
+                .insert("segoe-ui".into(), egui::FontData::from_owned(bytes).into());
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "segoe-ui".into());
+            ctx.set_fonts(fonts);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = ctx;
+}
+
 /// Slider position to gain: a cubic curve tracks perceived loudness well.
 pub fn volume_gain(pos: f32, muted: bool) -> f32 {
     if muted {
@@ -65,8 +89,8 @@ pub fn run(player: Player, listener: Option<Listener>, config: Config) -> eframe
         viewport: egui::ViewportBuilder::default()
             .with_title(crate::APP_TITLE)
             .with_app_id("flacura")
-            .with_inner_size([600.0, 320.0])
-            .with_min_inner_size([420.0, 250.0])
+            .with_inner_size([660.0, 360.0])
+            .with_min_inner_size([480.0, 300.0])
             .with_drag_and_drop(true)
             .with_icon(Arc::new(icon())),
         centered: true,
@@ -86,7 +110,24 @@ pub fn run(player: Player, listener: Option<Listener>, config: Config) -> eframe
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
+            configure_fonts(&ctx);
             ctx.set_visuals(egui::Visuals::dark());
+            ctx.style_mut_of(egui::Theme::Dark, |style| {
+                style.animation_time = 0.18;
+                style.visuals.window_fill = Color32::from_rgba_unmultiplied(17, 22, 35, 242);
+                style.visuals.panel_fill = Color32::TRANSPARENT;
+                style.visuals.window_stroke = Stroke::new(1.0, Color32::from_white_alpha(35));
+                style.visuals.window_corner_radius = egui::CornerRadius::same(16);
+                style.spacing.item_spacing = vec2(10.0, 12.0);
+                style.spacing.button_padding = vec2(14.0, 8.0);
+                for (kind, size) in [
+                    (egui::TextStyle::Body, 14.0),
+                    (egui::TextStyle::Button, 13.0),
+                    (egui::TextStyle::Small, 12.0),
+                ] {
+                    style.text_styles.insert(kind, FontId::proportional(size));
+                }
+            });
             let c = ctx.clone();
             player.set_waker(move || c.request_repaint());
             let (tx, ipc_rx) = mpsc::channel();
@@ -132,6 +173,7 @@ struct App {
     scroll_acc: f32,
     ended: bool,
     wave: Option<Arc<Waveform>>,
+    wave_gain: Option<f32>,
     /// Animated bar heights for the waveform: (peak, rms) per drawn bar.
     wave_anim: Vec<(f32, f32)>,
     wave_anim_settling: bool,
@@ -150,6 +192,9 @@ struct App {
     seek_hold: Option<(f64, Instant)>,
     config: Config,
     settings_open: bool,
+    association_task: Option<Receiver<Result<(), String>>>,
+    association_status: Option<Result<(), String>>,
+    track_reveal: f32,
     /// Settings changed and not yet written to disk.
     config_dirty: Option<Instant>,
     last_frame: Instant,
@@ -177,6 +222,7 @@ impl App {
             scroll_acc: 0.0,
             ended: false,
             wave: None,
+            wave_gain: None,
             wave_anim: Vec::new(),
             wave_anim_settling: false,
             motion: Motion::new(),
@@ -190,6 +236,9 @@ impl App {
             seek_hold: None,
             config,
             settings_open: false,
+            association_task: None,
+            association_status: None,
+            track_reveal: 1.0,
             config_dirty: None,
             last_frame: Instant::now(),
         }
@@ -324,6 +373,7 @@ impl App {
         while let Some(ev) = self.player.poll_event() {
             match ev {
                 Event::Loaded(info) => {
+                    self.track_reveal = 0.0;
                     self.error = None;
                     self.ended = false;
                     self.skips = 0;
@@ -334,6 +384,7 @@ impl App {
                         w.cancel();
                     }
                     self.wave = Some(waveform::spawn(&info, self.wake.clone()));
+                    self.wave_gain = None;
                     self.wave_anim.iter_mut().for_each(|v| *v = (0.0, 0.0));
                     self.sync_queue(&info.path);
                     let title = match &info.artist {
@@ -523,6 +574,14 @@ impl eframe::App for App {
     /// auto-advance and files opened from the file manager keep working.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_events(ctx);
+        if let Some(result) = self
+            .association_task
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.association_task = None;
+            self.association_status = Some(result);
+        }
         self.save_config_if_due(false);
         if self.config_dirty.is_some() {
             ctx.request_repaint_after_secs(0.6);
@@ -534,6 +593,7 @@ impl eframe::App for App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        self.track_reveal = (self.track_reveal + dt / 0.28).min(1.0);
 
         self.handle_input(&ctx);
 
@@ -551,21 +611,22 @@ impl eframe::App for App {
 
         if self.config.animated_background {
             self.motion.update(&self.player, dt, playing);
+            let bass_driven = 0.85 * self.motion.bass_energy + 0.15 * self.motion.energy;
             self.background_motion
-                .update(dt, self.motion.energy, self.motion.pulse);
+                .update(dt, bass_driven, self.motion.pulse);
         }
 
-        let inner = full.shrink2(vec2(16.0, 14.0));
-        let top_bar = Rect::from_min_size(inner.min, vec2(inner.width(), 22.0));
-        let header = Rect::from_min_size(
-            pos2(inner.left(), top_bar.bottom() + 8.0),
-            vec2(inner.width(), 40.0),
+        let inner = full.shrink2(vec2(24.0, 18.0));
+        let settings_center = pos2(inner.right() - 14.0, inner.top() + 30.0);
+        let header = Rect::from_min_size(inner.min, vec2(inner.width() - 42.0, 68.0));
+        let controls = Rect::from_min_max(
+            pos2(inner.left() + 14.0, inner.bottom() - 52.0),
+            pos2(inner.right() - 14.0, inner.bottom()),
         );
-        let controls = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 36.0), inner.max);
-        let wave_h = (inner.height() * 0.22).clamp(34.0, 72.0);
+        let wave_h = (inner.height() * 0.20).clamp(44.0, 72.0);
         let wave_rect = Rect::from_min_max(
-            pos2(inner.left(), controls.top() - 8.0 - wave_h),
-            pos2(inner.right(), controls.top() - 8.0),
+            pos2(inner.left() + 14.0, controls.top() - 28.0 - wave_h),
+            pos2(inner.right() - 14.0, controls.top() - 28.0),
         );
         let middle = Rect::from_min_max(
             pos2(inner.left(), header.bottom() + 12.0),
@@ -573,9 +634,9 @@ impl eframe::App for App {
         );
 
         // The background starts at the top edge, below the native title bar.
-        let clear_bottom = (wave_rect.top() - full.top()) / full.height();
+        let clear_bottom = ((wave_rect.top() - 18.0 - full.top()) / full.height()).min(0.56);
         let background_moving = self.draw_background(&painter, full, dt, clear_bottom);
-        self.draw_settings(ui, top_bar);
+        self.draw_settings(ui, settings_center);
 
         if self.info.is_none() {
             self.draw_empty(&painter, inner);
@@ -594,14 +655,16 @@ impl eframe::App for App {
             self.toggle_pause();
         }
 
-        // A local scrim keeps track text readable without hiding the waves
-        // across the whole upper part of the window.
-        painter.rect_filled(
-            header.expand2(vec2(6.0, 4.0)),
-            6.0,
-            Color32::from_rgba_unmultiplied(14, 15, 18, 100),
+        let mut title_painter = painter.clone();
+        title_painter.set_opacity(self.track_reveal);
+        self.draw_header(
+            &title_painter,
+            header
+                .shrink2(vec2(16.0, 19.0))
+                .translate(vec2(0.0, (1.0 - self.track_reveal) * 7.0)),
+            ctx.input(|i| i.time) as f32,
+            playing,
         );
-        self.draw_header(&painter, header, ctx.input(|i| i.time) as f32, playing);
         self.draw_waveform(ui, &painter, wave_rect, (accent, light), dt);
         let dragging = self.draw_controls(ui, &painter, controls, accent, light);
 
@@ -620,6 +683,7 @@ impl eframe::App for App {
         let animating = self.wave.as_ref().is_some_and(|w| w.is_running())
             || background_moving
             || self.wave_anim_settling
+            || self.track_reveal < 1.0
             || dragging;
         // Cap at ~60 fps (high refresh monitors would otherwise burn CPU);
         // when nothing moves, don't repaint at all. egui subtracts the
@@ -636,31 +700,113 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn draw_settings(&mut self, ui: &mut egui::Ui, top_bar: Rect) {
-        let button = Rect::from_min_size(
-            pos2(top_bar.right() - 80.0, top_bar.top()),
-            vec2(80.0, top_bar.height()),
-        );
-        if ui.put(button, egui::Button::new("Settings")).clicked() {
+    fn draw_settings(&mut self, ui: &mut egui::Ui, center: Pos2) {
+        let response = button(
+            ui,
+            ui.painter(),
+            "settings",
+            center,
+            14.0,
+            true,
+            None,
+            Icon::Settings,
+        )
+        .on_hover_text("Settings");
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Settings"));
+        if response.clicked() {
             self.settings_open = !self.settings_open;
         }
-        let mut open = self.settings_open;
-        egui::Window::new("Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                if ui
-                    .checkbox(&mut self.config.animated_background, "Animated background")
-                    .changed()
-                {
-                    self.config_dirty = Some(Instant::now());
-                    self.motion = Motion::new();
-                    self.background_motion = BackgroundMotion::default();
-                }
-                ui.label("Show waves that react to the music.");
+        let ctx = ui.ctx().clone();
+        let reveal =
+            ctx.animate_bool_with_time(ui.id().with("settings-panel"), self.settings_open, 0.16);
+        if reveal < 0.01 {
+            return;
+        }
+        let full = ui.max_rect();
+        let width = 320.0f32.min(full.width() - 32.0);
+        let origin = pos2(
+            full.right() - width - 16.0 + (1.0 - reveal) * 8.0,
+            full.top() + 16.0,
+        );
+        egui::Area::new(egui::Id::new("fixed-settings"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(origin)
+            .movable(false)
+            .show(&ctx, |ui| {
+                ui.set_opacity(reveal);
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(17, 21, 29, 250))
+                    .corner_radius(12)
+                    .inner_margin(18)
+                    .show(ui, |ui| {
+                        ui.set_width(width - 36.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Settings").size(18.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(egui::Button::new("×").frame(false))
+                                        .on_hover_text("Close settings")
+                                        .clicked()
+                                    {
+                                        self.settings_open = false;
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(10.0);
+                        let accent = self.accent().0;
+                        if setting_toggle(
+                            ui,
+                            "Animated background",
+                            &mut self.config.animated_background,
+                            accent,
+                        ) {
+                            self.config_dirty = Some(Instant::now());
+                            self.motion = Motion::new();
+                            self.background_motion = BackgroundMotion::default();
+                        }
+                        #[cfg(windows)]
+                        {
+                            ui.add_space(12.0);
+                            if ui
+                                .add_enabled(
+                                    self.association_task.is_none(),
+                                    egui::Button::new("Set default player").frame(false),
+                                )
+                                .clicked()
+                            {
+                                let (tx, rx) = mpsc::channel();
+                                let ctx = ui.ctx().clone();
+                                self.association_task = Some(rx);
+                                self.association_status = None;
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(crate::platform::register());
+                                    ctx.request_repaint();
+                                });
+                            }
+                            if self.association_task.is_some() {
+                                ui.spinner();
+                            }
+                            match &self.association_status {
+                                Some(Err(error)) => {
+                                    ui.colored_label(Color32::from_rgb(250, 145, 135), error);
+                                }
+                                _ => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Confirm the choice in Windows Settings.",
+                                        )
+                                        .size(12.0)
+                                        .color(DIM),
+                                    );
+                                }
+                            }
+                        }
+                    });
             });
-        self.settings_open = open;
     }
 
     fn accent(&self) -> (Color32, Color32) {
@@ -702,11 +848,14 @@ impl App {
 
         // Quality badge (right aligned).
         let label = info.quality_label();
-        let badge_font = FontId::monospace(11.5);
-        let (fg, stroke, fill) = if info.lossless {
-            (GOLD_LIGHT, GOLD, GOLD_DARK)
+        let badge_font = FontId::proportional(11.5);
+        let (fg, fill) = if info.lossless {
+            (
+                GOLD_LIGHT,
+                Color32::from_rgba_unmultiplied(236, 186, 76, 16),
+            )
         } else {
-            (DIM, FAINT, PANEL)
+            (DIM, Color32::from_black_alpha(25))
         };
         let g = p.layout_no_wrap(label, badge_font.clone(), fg);
         let mut bw = g.size().x + 16.0;
@@ -730,13 +879,7 @@ impl App {
                 );
             }
         }
-        p.rect(
-            badge,
-            6.0,
-            fill,
-            Stroke::new(1.0, stroke),
-            StrokeKind::Inside,
-        );
+        p.rect_filled(badge, 6.0, fill);
         let mut x = badge.left() + 8.0;
         if info.hires() {
             let chip =
@@ -763,7 +906,7 @@ impl App {
         let title = one_line(
             p,
             &info.title,
-            FontId::proportional(17.0),
+            FontId::proportional(20.0),
             title_color,
             max_w,
         );
@@ -788,7 +931,7 @@ impl App {
         }
         let mut sub_w = max_w;
         if !extra.is_empty() {
-            let g = p.layout_no_wrap(extra.join("  ·  "), FontId::monospace(11.0), DIM);
+            let g = p.layout_no_wrap(extra.join("  ·  "), FontId::proportional(11.0), DIM);
             sub_w = sub_w.min(r.width() - g.size().x - 16.0).max(40.0);
             p.galley(pos2(r.right() - g.size().x, r.top() + 25.0), g, DIM);
         }
@@ -807,7 +950,7 @@ impl App {
         dt: f32,
         clear_bottom: f32,
     ) -> bool {
-        p.rect_filled(full, 0.0, BG);
+        p.rect_filled(full, 0.0, Color32::from_rgb(9, 12, 20));
         if !self.config.animated_background {
             return false;
         }
@@ -846,10 +989,10 @@ impl App {
                 amplitude: 0.6 + 1.4 * e,
                 blend: 0.4,
                 // The wavy edge comes down into view as the music swells.
-                height: 0.16 + 0.42 * e + 0.14 * m.pulse,
+                height: 0.10 + 0.14 * e + 0.035 * m.pulse,
                 glow: 0.3 + 0.7 * m.pulse,
                 brightness: 0.25 + 0.6 * e + 0.5 * m.pulse,
-                opacity: 0.45,
+                opacity: 0.65,
                 reveal: self.intro,
                 clear_bottom,
             },
@@ -896,46 +1039,47 @@ impl App {
         if self.wave_anim.len() != n {
             self.wave_anim = vec![(0.0, 0.0); n];
         }
-        let k = 1.0 - (-dt * 10.0).exp();
+        let k = 1.0 - (-dt * 14.0).exp();
         let mid = r.center().y;
         let half = r.height() / 2.0;
         let mut settling = false;
-        // Normalize to the loudest point so quiet masters still show their shape.
-        let loudest = self.wave.as_ref().map_or(0.0, |w| {
-            (0..BUCKETS)
-                .filter_map(|b| w.get(b))
-                .fold(0.0f32, |m, (pk, _)| m.max(pk))
+        // Fit recorded energy to the display, ignoring isolated peak spikes.
+        // Cache once background decoding finishes instead of sorting per frame.
+        let gain = self.wave_gain.unwrap_or_else(|| {
+            self.wave.as_ref().map_or(1.0, |wave| {
+                let mut rms: Vec<f32> = (0..BUCKETS)
+                    .filter_map(|b| wave.get(b).map(|(_, rms)| rms))
+                    .collect();
+                let gain = waveform_gain(&mut rms);
+                if !wave.is_running() {
+                    self.wave_gain = Some(gain);
+                }
+                gain
+            })
         });
-        let gain = if loudest > 1e-4 {
-            (0.95 / loudest).min(16.0)
-        } else {
-            1.0
-        };
         let mut mesh = Mesh::default();
-        let unplayed = Color32::from_rgb(70, 75, 88);
-        let hover_col = Color32::from_rgb(105, 110, 125);
+        let unplayed = Color32::from_rgb(100, 113, 137);
+        let hover_col = Color32::from_rgb(155, 174, 204);
 
         for i in 0..n {
             let b0 = i * BUCKETS / n;
             let b1 = ((i + 1) * BUCKETS / n).max(b0 + 1).min(BUCKETS);
             let target = self.wave.as_ref().and_then(|w| {
                 let mut acc: Option<(f32, f32)> = None;
+                let mut count = 0.0;
                 for b in b0..b1 {
                     if let Some((pk, rms)) = w.get(b) {
                         let a = acc.get_or_insert((0.0, 0.0));
                         a.0 = a.0.max(pk);
-                        a.1 = a.1.max(rms);
+                        a.1 += rms * rms;
+                        count += 1.0;
                     }
                 }
-                acc
+                acc.map(|(peak, sum)| (peak, (sum / count).sqrt()))
             });
             let cur = &mut self.wave_anim[i];
             if let Some((tp, tr)) = target {
-                // Perceptual scaling: quiet passages stay visible.
-                let (tp, tr) = (
-                    (tp * gain).min(1.0).powf(0.8),
-                    (tr * gain).min(1.0).powf(0.8),
-                );
+                let (tp, tr) = waveform_levels(tp, tr, gain);
                 cur.0 += (tp - cur.0) * k;
                 cur.1 += (tr - cur.1) * k;
                 if (tp - cur.0).abs() > 0.003 {
@@ -979,7 +1123,7 @@ impl App {
         if let (Some(hx), Some(d)) = (hover_x, duration) {
             let t = frac_at(hx) * d;
             let s = fmt_time(t);
-            let g = p.layout_no_wrap(s, FontId::monospace(11.0), TEXT);
+            let g = p.layout_no_wrap(s, FontId::proportional(11.0), TEXT);
             let w = g.size().x + 10.0;
             let x = (hx - w / 2.0).clamp(r.left(), r.right() - w);
             let tip = Rect::from_min_size(pos2(x, r.top() - 22.0), vec2(w, 17.0));
@@ -1004,13 +1148,13 @@ impl App {
     ) -> bool {
         let cy = r.center().y;
 
-        let (big, small) = (18.0, 14.0);
+        let (big, small) = (22.0, 15.0);
         // Left edge of the transport cluster (stop button).
         let stop_left = r.center().x - (big + 8.0 + small) - (2.0 * small + 4.0) - small;
 
         // Time; the duration is dropped when it would run into the buttons.
         let pos = self.position();
-        let font = FontId::monospace(12.0);
+        let font = FontId::proportional(12.0);
         let g = p.layout_no_wrap(fmt_time(pos), font.clone(), TEXT);
         let tw = g.size().x;
         p.galley(pos2(r.left(), cy - g.size().y / 2.0), g, TEXT);
@@ -1127,7 +1271,7 @@ impl App {
         if active {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             let label = format!("{:.0}%", level * 100.0);
-            let g = p.layout_no_wrap(label, FontId::monospace(10.5), TEXT);
+            let g = p.layout_no_wrap(label, FontId::proportional(10.5), TEXT);
             let w = g.size().x + 10.0;
             let x = (fill_x - w / 2.0).clamp(slider.left() - 20.0, r.right() - w);
             let tip = Rect::from_min_size(pos2(x, slider.top() - 20.0), vec2(w, 16.0));
@@ -1142,8 +1286,69 @@ impl App {
     }
 }
 
+/// RMS carries most of the visible envelope. Peak-only scaling turns limited
+/// masters into solid blocks; reserve headroom even for a full-scale signal.
+fn waveform_levels(peak: f32, rms: f32, gain: f32) -> (f32, f32) {
+    let peak = (peak * gain).clamp(0.0, 1.0);
+    let rms = (rms * gain).clamp(0.0, peak);
+    let outer = (0.10 * peak + 0.90 * rms).powf(0.75) * 0.84;
+    let core = (rms.powf(0.75) * 0.68).min(outer);
+    (outer, core)
+}
+
+fn setting_toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, accent: Color32) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
+            if response.clicked() {
+                *value = !*value;
+                response.mark_changed();
+                changed = true;
+            }
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *value, label)
+            });
+            let t = ui.ctx().animate_bool_with_time(response.id, *value, 0.14);
+            ui.painter()
+                .rect_filled(rect, 10.0, Color32::from_white_alpha(22));
+            ui.painter().rect_filled(
+                rect,
+                10.0,
+                Color32::from_rgba_unmultiplied(
+                    accent.r(),
+                    accent.g(),
+                    accent.b(),
+                    (t * 180.0) as u8,
+                ),
+            );
+            ui.painter().circle_filled(
+                pos2(rect.left() + 10.0 + t * 14.0, rect.center().y),
+                6.0,
+                TEXT,
+            );
+        });
+    });
+    changed
+}
+
+fn waveform_gain(rms: &mut [f32]) -> f32 {
+    if rms.is_empty() {
+        return 1.0;
+    }
+    rms.sort_unstable_by(f32::total_cmp);
+    let reference = rms[(rms.len() - 1) * 95 / 100];
+    if reference > 1e-4 {
+        (0.75 / reference).clamp(0.25, 64.0)
+    } else {
+        1.0
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Icon {
+    Settings,
     Play,
     Pause,
     Stop,
@@ -1171,19 +1376,35 @@ fn button(
     let resp = ui.interact(rect, ui.id().with(id), sense);
     let hovered = enabled && resp.hovered();
     let pressed = enabled && resp.is_pointer_button_down_on();
+    let hover = ui
+        .ctx()
+        .animate_bool_with_time(ui.id().with((id, "hover")), hovered, 0.16);
+    let press = ui
+        .ctx()
+        .animate_bool_with_time(ui.id().with((id, "press")), pressed, 0.08);
+    let animated_rad = rad * (1.0 + hover * 0.06 - press * 0.10);
     let fg = match filled {
         Some((fill, hover)) => {
-            let r = if pressed { rad * 0.94 } else { rad };
-            p.circle_filled(c, r, if hovered { hover } else { fill });
+            for k in (1..=4).rev() {
+                p.circle_filled(
+                    c,
+                    animated_rad + k as f32 * 2.5,
+                    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 8),
+                );
+            }
+            p.circle_filled(c, animated_rad, if hovered { hover } else { fill });
             BG
         }
         None => {
-            if hovered {
-                let a = if pressed { 30 } else { 16 };
-                p.circle_filled(c, rad, Color32::from_white_alpha(a));
-            }
+            p.circle_filled(
+                c,
+                animated_rad,
+                Color32::from_white_alpha((24.0 * hover + 15.0 * press) as u8),
+            );
             if !enabled {
                 FAINT
+            } else if matches!(icon, Icon::Settings) && !hovered {
+                DIM
             } else if hovered {
                 Color32::WHITE
             } else {
@@ -1191,7 +1412,20 @@ fn button(
             }
         }
     };
-    draw_icon(p, c, rad * 0.42, icon, fg);
+    if filled.is_some() {
+        let pause = ui.ctx().animate_bool_with_time(
+            ui.id().with((id, "pause")),
+            matches!(icon, Icon::Pause),
+            0.16,
+        );
+        let mut icon_painter = p.clone();
+        icon_painter.set_opacity(1.0 - pause);
+        draw_icon(&icon_painter, c, animated_rad * 0.42, Icon::Play, fg);
+        icon_painter.set_opacity(pause);
+        draw_icon(&icon_painter, c, animated_rad * 0.42, Icon::Pause, fg);
+    } else {
+        draw_icon(p, c, animated_rad * 0.42, icon, fg);
+    }
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -1201,6 +1435,17 @@ fn button(
 fn draw_icon(p: &egui::Painter, c: Pos2, s: f32, icon: Icon, col: Color32) {
     let tri = |pts: Vec<Pos2>| egui::Shape::convex_polygon(pts, col, Stroke::NONE);
     match icon {
+        Icon::Settings => {
+            let outline = (0..32)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 32.0;
+                    let radius = s * if matches!(i % 4, 1 | 2) { 1.4 } else { 1.08 };
+                    c + vec2(angle.cos(), angle.sin()) * radius
+                })
+                .collect();
+            p.add(egui::Shape::closed_line(outline, Stroke::new(1.2, col)));
+            p.circle_stroke(c, s * 0.45, Stroke::new(1.2, col));
+        }
         Icon::Play => {
             let o = c + vec2(s * 0.15, 0.0);
             p.add(tri(vec![
@@ -1334,6 +1579,26 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limited_peaks_still_show_rms_dynamics_and_leave_headroom() {
+        let quiet = waveform_levels(1.0, 0.10, 0.95);
+        let loud = waveform_levels(1.0, 0.65, 0.95);
+        assert!(loud.0 > quiet.0 * 2.0);
+        let clipped = waveform_levels(1.0, 1.0, 1.0);
+        assert!(clipped.0 < 0.85 && clipped.1 <= clipped.0);
+        assert_eq!(waveform_levels(0.0, 0.0, 16.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn quiet_masters_remain_visible_without_one_spike_flattening_the_track() {
+        let mut levels = vec![0.025; 100];
+        levels[99] = 0.95;
+        let gain = waveform_gain(&mut levels);
+        let visible = waveform_levels(0.05, 0.025, gain);
+        assert!(visible.0 > 0.55 && visible.0 < 0.85);
+        assert_eq!(waveform_gain(&mut [0.0; 10]), 1.0);
+    }
 
     #[test]
     fn natural_order() {

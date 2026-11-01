@@ -165,7 +165,8 @@ void main() {
     float warp = snoise(vec2(X * 0.45 * uScale + pace * 0.02 + seed, pace * 0.05 + seed));
     float wave = snoise(vec2(X * 0.75 * uScale + warp * 0.35 - pace * 0.03 + seed, pace * 0.07 - seed)) * 0.72
       + snoise(vec2(X * 1.6 * uScale + warp * 0.5 + pace * 0.04 - seed, pace * 0.1 + seed * 0.5)) * 0.28;
-    float hem = uHeight + layer * 0.07 + wave * 0.15 * uAmplitude;
+    float hem = uHeight + layer * 0.035 + wave * 0.085 * uAmplitude;
+    hem = min(hem, uClearBottom - 0.12);
     hem = mix(-0.25, hem, uReveal);
 
     float soft = (0.04 + uBlend * 0.16) * (1.0 + layer * 0.9);
@@ -174,7 +175,10 @@ void main() {
     float high = 0.26 + soft * 0.6;
     float body = pow(smootherstep(low, high, rise), 1.5 + uGlow * 0.6);
     float lobes = 0.86 + 0.14 * snoise(vec2(X * 0.9 * uScale - pace * 0.025 + seed, y * 0.3 + pace * 0.04));
-    float alpha = clamp(body * lobes * (layer < 0.5 ? 1.0 : 0.32 / layer), 0.0, 1.0);
+    float ribbonWidth = 0.018 + layer * 0.014 + uBlend * 0.018;
+    float ribbon = exp(-pow((y - hem) / ribbonWidth, 2.0));
+    float alpha = clamp((body * 0.68 + ribbon * 0.35) * lobes
+      * (layer < 0.5 ? 1.0 : 0.32 / layer), 0.0, 1.0);
 
     vec3 tint = ramp(u + 0.05 * sin(pace * 0.08 + layer * 2.3) + layer * 0.1 + max(rise, 0.0) * 0.05);
     glow = 1.0 - (1.0 - glow) * (1.0 - tint * alpha);
@@ -182,15 +186,14 @@ void main() {
   }
 
   // Waves reach the top edge; only the waveform/controls need a full-width mask.
-  float clearing = 1.0 - smoothstep(uClearBottom - 0.10, uClearBottom + 0.02, y);
-  float mask = 0.08 + 0.92 * clearing;
+  float mask = 1.0 - smoothstep(uClearBottom - 0.18, uClearBottom, y);
 
   float fade = smootherstep(0.0, 0.7, uReveal) * uOpacity * mask;
   float strength = clamp(uBrightness, 0.0, 2.0);
   glow *= fade * min(strength, 1.0);
   cover *= fade * min(strength, 1.0);
   glow = 1.0 - pow(1.0 - glow, vec3(max(strength, 1.0)));
-  float dither = (hash(gl_FragCoord.xy) - 0.5) / 255.0;
+  float dither = (hash(gl_FragCoord.xy) - 0.5) / 255.0 * mask;
   outColor = vec4(glow + dither, clamp(cover + dither, 0.0, 1.0));
 }
 "#;

@@ -9,14 +9,20 @@ and releases for those platforms are deferred until needed.
   it over to the existing window in a few milliseconds.
 - **A background that follows the music.** A faint aurora glows behind the
   player (gold for lossless, blue for lossy) and follows the loudness of what
-  is playing: quiet passages leave it low, dim and nearly still, loud ones
-  make it brighter, reach further down and flow several times faster, and
-  beats give it a short flash. Waves start directly below the window title
+  is playing: bass and kick drums drive most of its movement, height and
+  brightness, with gentler response to the rest of the music. Bass hits give
+  it a short flash. Waves start directly below the window title
   bar, with smooth motion and fast audio response. Track text and controls
   remain readable. When paused it comes to rest. Disable it in **Settings**.
 - **Waveform seekbar.** The whole track is drawn as a waveform that grows in
   while it's decoded in the background, on several threads (a 3-minute FLAC
-  takes about 35 ms). Click or drag to seek.
+  takes about 35 ms). Its RMS-weighted envelope fits each recording's typical
+  energy, keeping quiet masters visible and leaving headroom for loud ones. Click or drag
+  to seek; the display does not change playback volume.
+- **Minimal animated controls.** Soft hover/press highlights, play/pause
+  transitions and track-title fades sit over the aurora, without decorative
+  panels or branding. The app window itself is opaque; your desktop does not
+  show through it. Waves stay above the waveform and controls.
 - **Transport and volume.** Stop, previous, play/pause and next buttons, a
   volume slider and a mute button. Volume and mute are remembered.
 - **Quality at a glance.** Codec, bit depth and sample rate, or bitrate for
@@ -50,10 +56,11 @@ decoders).
 
 ## Settings
 
-Open **Settings** in the upper-right corner and toggle **Animated background**
+Open the **Settings** gear in the upper-right corner and toggle **Animated background**
 to enable or disable the music-reactive waves. The change takes effect
 immediately and is remembered after restarting. Disabling the background also
 skips its shader drawing and audio analysis; the waveform seekbar stays usable.
+Settings opens in a fixed panel. Windows UI uses the system Segoe UI typeface.
 
 Volume, mute and the animated-background preference are saved automatically to:
 
@@ -63,12 +70,19 @@ Volume, mute and the animated-background preference are saved automatically to:
 
 ## Make it the default player
 
+On Windows, open **Settings > Set as default player**. Flacura registers its
+supported audio formats and opens its page in Windows Default Apps. Confirm
+your choices there; Windows requires the user's final selection. Registration
+runs in the background so the player stays responsive.
+
+The command-line equivalent is:
+
 ```bash
 flacura --register
 ```
 
 - **Windows:** registers Flacura for audio files under `HKCU` (no admin
-  needed) and opens *Settings > Default apps*, where you pick Flacura.
+  needed) and opens its page in *Settings > Default apps*, where you pick Flacura.
   Windows doesn't let apps set themselves as the default.
 - **Linux:** installs `~/.local/share/applications/flacura.desktop` and sets it
   as the default for common audio MIME types via `xdg-mime`.

@@ -2,6 +2,8 @@
 
 #[cfg(windows)]
 use crate::decode::AUDIO_EXTENSIONS;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const PROG_ID: &str = "Flacura.AudioFile";
@@ -9,6 +11,7 @@ const PROG_ID: &str = "Flacura.AudioFile";
 #[cfg(windows)]
 fn reg(args: &[&str]) -> Result<(), String> {
     let status = std::process::Command::new("reg")
+        .creation_flags(0x08000000)
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -26,14 +29,37 @@ fn reg(args: &[&str]) -> Result<(), String> {
 #[cfg(windows)]
 pub fn register() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_name = exe
+        .file_name()
+        .ok_or("Executable has no filename")?
+        .to_string_lossy()
+        .into_owned();
     let exe = exe.to_string_lossy();
     let open = format!("\"{exe}\" \"%1\"");
     let icon = format!("\"{exe}\",0");
     let classes = r"HKCU\Software\Classes";
     let prog = format!(r"{classes}\{PROG_ID}");
-    let app = format!(r"{classes}\Applications\flacura.exe");
+    let app = format!(r"{classes}\Applications\{exe_name}");
+    let capabilities = r"HKCU\Software\Flacura\Capabilities";
 
     reg(&["add", &prog, "/ve", "/d", "Audio file", "/f"])?;
+    reg(&["add", &app, "/v", "FriendlyAppName", "/d", "Flacura", "/f"])?;
+    for (name, value) in [
+        ("ApplicationName", "Flacura"),
+        ("ApplicationDescription", "Flacura audio player"),
+        ("ApplicationIcon", icon.as_str()),
+    ] {
+        reg(&["add", capabilities, "/v", name, "/d", value, "/f"])?;
+    }
+    reg(&[
+        "add",
+        r"HKCU\Software\RegisteredApplications",
+        "/v",
+        "Flacura",
+        "/d",
+        r"Software\Flacura\Capabilities",
+        "/f",
+    ])?;
     reg(&[
         "add",
         &format!(r"{prog}\DefaultIcon"),
@@ -59,6 +85,15 @@ pub fn register() -> Result<(), String> {
         "/f",
     ])?;
     for ext in AUDIO_EXTENSIONS {
+        reg(&[
+            "add",
+            &format!(r"{capabilities}\FileAssociations"),
+            "/v",
+            &format!(".{ext}"),
+            "/d",
+            PROG_ID,
+            "/f",
+        ])?;
         let key = format!(r"{classes}\.{ext}\OpenWithProgids");
         reg(&["add", &key, "/v", PROG_ID, "/t", "REG_NONE", "/f"])?;
         reg(&[
@@ -71,9 +106,10 @@ pub fn register() -> Result<(), String> {
             "/f",
         ])?;
     }
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", "ms-settings:defaultapps"])
-        .status();
+    std::process::Command::new("explorer.exe")
+        .arg("ms-settings:defaultapps?registeredAppUser=Flacura")
+        .spawn()
+        .map_err(|e| format!("Could not open Windows Settings: {e}"))?;
     Ok(())
 }
 
@@ -86,6 +122,23 @@ pub fn unregister() -> Result<(), String> {
         &format!(r"{classes}\Applications\flacura.exe"),
         "/f",
     ]);
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(name) = exe.file_name()
+    {
+        let _ = reg(&[
+            "delete",
+            &format!(r"{classes}\Applications\{}", name.to_string_lossy()),
+            "/f",
+        ]);
+    }
+    let _ = reg(&[
+        "delete",
+        r"HKCU\Software\RegisteredApplications",
+        "/v",
+        "Flacura",
+        "/f",
+    ]);
+    let _ = reg(&["delete", r"HKCU\Software\Flacura\Capabilities", "/f"]);
     for ext in AUDIO_EXTENSIONS {
         let key = format!(r"{classes}\.{ext}\OpenWithProgids");
         let _ = reg(&["delete", &key, "/v", PROG_ID, "/f"]);

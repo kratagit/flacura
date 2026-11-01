@@ -50,6 +50,29 @@
 - Keep the aurora anchored to the client area's top edge below the native
   title bar. Smooth visual speed/decay separately from fast audio detection;
   preserve the response-time tests rather than making the detector sluggish.
+- Keep the native window opaque. Glass/transparency belongs only to cards,
+  buttons and overlays inside the app, never to the entire desktop window.
+- Keep the player minimal: no in-app Flacura wordmark, decorative status
+  indicators, large bordered cards or framed transport/waveform panels.
+  Prefer subtle translucent hover states and fast, unobtrusive transitions.
+- Settings is a subtle gear next to the track header, not a separate row or
+  text pill that pushes the track information down.
+- Align the gear with the title/quality row. Settings is a fixed, non-draggable
+  panel, never a movable egui window. Use proportional Segoe UI on Windows
+  (loaded from the system with fallback), including time and quality labels.
+- The aurora must fade completely to zero above the waveform; do not retain
+  residual glow or shader dither under the waveform/transport controls.
+- The seekbar uses an RMS-weighted display envelope with peak accents and
+  vertical headroom, normalized to the track's 95th-percentile RMS so quiet
+  masters remain visible. Cache its gain when decoding finishes. Do not boost
+  limited peaks until the whole track appears full-height, and do not change
+  audio gain to fix a visualization issue.
+- Background motion is driven mainly by 35–250 Hz bass energy and low-band
+  onsets, with a small broadband contribution. Keep fast response and frequency
+  selectivity tests. This does not filter the audio or the waveform seekbar.
+- Windows default-player registration runs off the UI thread and registers
+  HKCU Capabilities/RegisteredApplications before opening Windows Settings.
+  The user confirms the final default; do not write protected UserChoice data.
 - Keep lossless gold / lossy blue styling and the existing hi-res definition:
   lossless with more than 16 bits or more than 48 kHz.
 - When adding a format, review decoder support, `AUDIO_EXTENSIONS`, folder
