@@ -1,9 +1,8 @@
 //! Turns what the device is playing into how the background moves.
 //!
-//! The main signal is loudness: quiet passages (which are usually the calm
-//! ones) give a low, dim, slow aurora, loud passages a tall, bright, fast one.
-//! It follows the music within a few tenths of a second. Beats (spectral flux
-//! onsets) add a short extra push on top.
+//! Low-frequency energy and bass onsets drive most of the background motion;
+//! broadband loudness adds a smaller response. The detector stays fast while
+//! a separate visual envelope smooths movement and beat tails.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -60,6 +59,10 @@ pub struct Motion {
     fft: Arc<dyn RealToComplex<f32>>,
     window: Vec<f32>,
     norm2: f32,
+    bass_norm: f32,
+    bass_bins: std::ops::Range<usize>,
+    bass_db: f32,
+    bass_short_db: f32,
     input: Vec<f32>,
     output: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
@@ -83,6 +86,8 @@ pub struct Motion {
 
     /// How loud / intense the music is right now (0..1).
     pub energy: f32,
+    /// Low-frequency energy (roughly 35–250 Hz), independent of treble level.
+    pub bass_energy: f32,
     /// Short push on beats and attacks, decays in ~0.25 s.
     pub pulse: f32,
 }
@@ -97,6 +102,10 @@ impl Motion {
             fft,
             window: Vec::new(),
             norm2: 1.0,
+            bass_norm: 1.0,
+            bass_bins: 1..2,
+            bass_db: -120.0,
+            bass_short_db: -120.0,
             input: Vec::new(),
             output: Vec::new(),
             scratch: Vec::new(),
@@ -114,6 +123,7 @@ impl Motion {
             short_db: -120.0,
             long_db: None,
             energy: 0.0,
+            bass_energy: 0.0,
             pulse: 0.0,
         };
         m.configure(48_000);
@@ -138,10 +148,14 @@ impl Motion {
             .collect();
         let norm = 2.0 / self.window.iter().sum::<f32>();
         self.norm2 = norm * norm;
+        self.bass_norm = 2.0 / (n as f32 * self.window.iter().map(|x| x * x).sum::<f32>());
         self.buf_l = vec![0.0; n];
         self.buf_r = vec![0.0; n];
         let bin_hz = self.rate as f32 / n as f32;
         let bins = self.output.len();
+        let bass_lo = (35.0 / bin_hz).floor().max(1.0) as usize;
+        let bass_hi = ((250.0 / bin_hz).ceil() as usize + 1).min(bins);
+        self.bass_bins = bass_lo..bass_hi;
         let f_hi = F_HI.min(self.rate as f32 * 0.45);
         let ratio = f_hi / F_LO;
         self.bands = (0..BANDS)
@@ -158,7 +172,7 @@ impl Motion {
 
     /// True while something still changes on screen.
     pub fn is_moving(&self) -> bool {
-        self.energy > 0.005 || self.pulse > 0.005
+        self.energy > 0.005 || self.bass_energy > 0.005 || self.pulse > 0.005
     }
 
     /// Consumes newly played audio and advances the smoothing by `dt` seconds.
@@ -219,8 +233,24 @@ impl Motion {
             0.0
         };
         self.energy += (target - self.energy) * (1.0 - (-dt / 0.02).exp());
+        let bass_db = if active { self.bass_db } else { -120.0 };
+        let bass_tau = if bass_db > self.bass_short_db {
+            0.015
+        } else {
+            0.12
+        };
+        self.bass_short_db += (bass_db - self.bass_short_db) * (1.0 - (-dt / bass_tau).exp());
+        let bass_target = if active {
+            smoothstep(-48.0, -12.0, self.bass_short_db)
+        } else {
+            0.0
+        };
+        self.bass_energy += (bass_target - self.bass_energy) * (1.0 - (-dt / 0.018).exp());
         if self.energy < 0.003 && !active {
             self.energy = 0.0;
+        }
+        if self.bass_energy < 0.003 && !active {
+            self.bass_energy = 0.0;
         }
         self.pulse *= (-dt / 0.15).exp();
         if self.pulse < 0.005 {
@@ -244,6 +274,12 @@ impl Motion {
         {
             return;
         }
+        let bass_power = self.output[self.bass_bins.clone()]
+            .iter()
+            .map(|bin| bin.norm_sqr())
+            .sum::<f32>()
+            * self.bass_norm;
+        self.bass_db = 10.0 * (bass_power + 1e-12).log10();
         for (b, &(lo, hi)) in self.bands.iter().enumerate() {
             let p = self.output[lo..=hi]
                 .iter()
@@ -252,20 +288,29 @@ impl Motion {
             self.band_db[b] = 10.0 * (p * self.norm2 + 1e-14).log10();
         }
 
-        // Beat pulse: positive spectral flux well above its recent average.
+        // Bass/kick pulse: positive low-band spectral flux above its baseline.
         let floor = self.column_db - 45.0;
         let mut flux = 0.0;
+        let mut bass_bands = 0;
         for b in 0..BANDS {
+            if self.bands[b].0 as f32 * self.rate as f32 / n as f32 > 250.0 {
+                break;
+            }
+            bass_bands += 1;
             let d = self.band_db[b].max(floor) - self.prev_db[b].max(floor);
             if d > 0.0 {
                 flux += d * (1.5 - b as f32 / BANDS as f32);
             }
         }
-        flux /= BANDS as f32;
+        flux /= bass_bands.max(1) as f32;
         self.prev_db.copy_from_slice(&self.band_db);
         let (mean, sd) = mean_sd(&self.flux);
         self.since_onset += 1.0 / COLS_PER_SEC as f32;
-        if self.flux.len() >= 20 && flux > mean + 1.3 * sd && flux > 0.5 && self.since_onset > 0.09
+        if self.flux.len() >= 20
+            && flux > mean + 1.3 * sd
+            && flux > 0.5
+            && self.since_onset > 0.09
+            && self.bass_db > -48.0
         {
             self.pulse = self
                 .pulse
@@ -341,9 +386,30 @@ mod tests {
     const RATE: u32 = 44_100;
 
     fn tone(amp: f32, secs: f32) -> Vec<f32> {
+        tone_at(220.0, amp, secs)
+    }
+
+    fn tone_at(hz: f32, amp: f32, secs: f32) -> Vec<f32> {
         (0..(secs * RATE as f32) as usize)
-            .map(|i| amp * (std::f32::consts::TAU * 220.0 * i as f32 / RATE as f32).sin())
+            .map(|i| amp * (std::f32::consts::TAU * hz * i as f32 / RATE as f32).sin())
             .collect()
+    }
+
+    #[test]
+    fn bass_detector_prefers_low_tones_at_equal_playback_level() {
+        let mut bass = Motion::new();
+        bass.analyze(&tone_at(80.0, 0.5, 1.0), RATE);
+        let mut treble = Motion::new();
+        treble.analyze(&tone_at(3000.0, 0.5, 1.0), RATE);
+        assert!(bass.bass_energy > 0.9, "bass: {}", bass.bass_energy);
+        assert!(treble.bass_energy < 0.05, "treble: {}", treble.bass_energy);
+    }
+
+    #[test]
+    fn bass_reacts_within_eighty_milliseconds() {
+        let mut bass = Motion::new();
+        bass.analyze(&tone_at(80.0, 0.5, 0.08), RATE);
+        assert!(bass.bass_energy > 0.8, "bass: {}", bass.bass_energy);
     }
 
     #[test]
