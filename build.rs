@@ -18,7 +18,10 @@ fn main() {
         .set("FileVersion", &version)
         .set("ProductVersion", &version)
         .set("InternalName", "flacura")
-        .set("OriginalFilename", &format!("flacura-{version}.exe"))
+        .set(
+            "OriginalFilename",
+            &format!("flacura-v{version}-windows-x86_64.exe"),
+        )
         .compile()
         .expect("compile Windows icon and version resources");
 }

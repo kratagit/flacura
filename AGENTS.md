@@ -97,7 +97,7 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
   pushes to `main` (normally after merging). Branches, PRs and tags do not
   trigger builds. This is primarily a personal Windows application.
 - Every main run checks formatting, Clippy and tests, compiles once, and
-  publishes `flacura-VERSION.exe` directly to GitHub Releases. Do not add ZIP archives,
+  publishes `flacura-vVERSION-windows-x86_64.exe` directly to GitHub Releases. Do not add ZIP archives,
   installers, release PRs or manual tag/version steps unless requested.
 - `.github/scripts/prepare-release.ps1` chooses the next patch version from
   existing `vMAJOR.MINOR.PATCH` tags, using Cargo.toml as a minimum baseline.

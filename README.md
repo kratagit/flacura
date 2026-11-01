@@ -101,10 +101,12 @@ sudo apt install pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libgl
 ### Automatic Windows releases
 
 Merge changes into `main`. GitHub checks the code, builds the Windows x86_64
-application once, and publishes **flacura-VERSION.exe** directly to
+application once, and publishes **flacura-vVERSION-windows-x86_64.exe** directly to
 [GitHub Releases](https://github.com/kratagit/flacura/releases/latest).
 Download the EXE and run it; no ZIP extraction is needed. The executable has
 an embedded golden-record icon and Windows file/product version information.
+`windows-x86_64` means 64-bit Windows on Intel/AMD processors (not 32-bit x86
+or native ARM64).
 
 Branch pushes and PRs do not start builds. There is no separate release PR,
 manual tag or version-editing step. A failed check prevents publication.
