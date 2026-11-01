@@ -109,7 +109,7 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
   resources. Keep the window title, EXE metadata and release filename aligned.
   winresource requires the Windows SDK resource compiler (MSVC) or windres
   (GNU); it is a build dependency only, not an installed runtime dependency.
-- Releases are ordinary published releases, named `Flacura vVERSION`, tagged
+- Releases are ordinary published releases, named only `vVERSION`, tagged
   at the triggering commit. The EXE is uploaded only after all checks pass.
 - Conventional Commit titles remain useful, but every main push releases;
   the commit type does not control version bumps. No Release Please is used.
