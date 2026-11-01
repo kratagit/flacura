@@ -94,6 +94,7 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
 
 - `build.yml` checks formatting, Clippy, tests and release compilation on
   Windows. It runs on non-main pushes, PRs, manual dispatch and reusable calls.
+  It only requires `contents: read` and exports the artifact label as an output.
   `releases` handles main pushes and calls the same build workflow.
 - Development artifacts use `flacura-windows-x86_64-vVERSION-dev.COMMIT` and
   expire after 14 days. Releases attach `flacura-windows-x86_64-vVERSION.zip`
@@ -106,8 +107,12 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
   `Cargo.lock`, the manifest and `CHANGELOG.md`. The initial release is 0.1.0.
   Do not bump versions or create/push release tags for routine changes.
 - After main passes checks, the bot prepares/updates the release PR. Merging
-  that PR creates a tag/release. `publish` calls the reusable Windows build
+  that PR creates a tag/release. `publish.yml` calls the reusable Windows build
   with the exact released SHA and tag, then uploads the ZIP after checks pass.
+  It also handles manually pushed version tags.
+- Keep write permissions in the publishing/release workflows. A reusable
+  workflow cannot request more permissions than its caller, even for skipped
+  jobs. Do not put a `contents: write` job inside the read-only build workflow.
 - The built-in `GITHUB_TOKEN` cannot trigger new workflows through bot-created
   PRs/tags. Keep the direct reusable workflow call; do not rely on tag-push
   triggers alone. The tag must match the Cargo version and lockfile.

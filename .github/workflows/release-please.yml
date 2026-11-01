@@ -10,10 +10,10 @@ permissions:
 
 jobs:
   verify:
-    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/build.yml
 
   release-please:
+    if: github.ref == 'refs/heads/main'
     needs: verify
     runs-on: windows-latest
     concurrency:
@@ -27,7 +27,7 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       sha: ${{ steps.release.outputs.sha }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           target-branch: main
@@ -37,7 +37,7 @@ jobs:
   publish:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
-    uses: ./.github/workflows/build.yml
+    uses: ./.github/workflows/publish.yml
     permissions:
       contents: write
     with:

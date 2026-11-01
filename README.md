@@ -129,8 +129,8 @@ setting the final commit title:
 After changes reach `main` and the Windows checks pass, Release Please opens
 or updates a release PR containing the new versions in `Cargo.toml` and
 `Cargo.lock`, and a generated `CHANGELOG.md`. Merge that PR when ready to ship.
-The bot creates the tag and GitHub Release, then builds that exact tagged
-commit and attaches the Windows ZIP archive after the build passes. No manual
+The bot creates the tag and GitHub Release, then `publish.yml` builds that exact
+tagged commit and attaches the Windows ZIP archive after the build passes. No manual
 version edits or tags are needed.
 
 This uses the built-in `GITHUB_TOKEN`; no personal access token is required.
