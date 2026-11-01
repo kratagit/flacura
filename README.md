@@ -57,12 +57,14 @@ decoders).
 ## Settings
 
 Open the **Settings** gear in the upper-right corner and toggle **Animated background**
-to enable or disable the music-reactive waves. The change takes effect
-immediately and is remembered after restarting. Disabling the background also
-skips its shader drawing and audio analysis; the waveform seekbar stays usable.
-Settings opens in a fixed panel. Windows UI uses the system Segoe UI typeface.
+to enable or disable the music-reactive waves, or **Adapt speed to tempo** to
+scale wave speed and responsiveness with the track's rhythmic pace. The changes
+take effect immediately and are remembered after restarting. Disabling the
+background also skips its shader drawing and audio analysis; the waveform
+seekbar stays usable. Settings opens in a fixed liquid-glass panel. Windows UI
+uses the system Segoe UI typeface.
 
-Volume, mute and the animated-background preference are saved automatically to:
+Volume, mute and background preferences are saved automatically to:
 
 - Windows: `%APPDATA%\Flacura\config.txt`
 - Linux: `$XDG_CONFIG_HOME/flacura/config.txt` (usually `~/.config/flacura/config.txt`)
