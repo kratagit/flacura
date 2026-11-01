@@ -50,6 +50,30 @@ const AURORA_IDLE: [[f32; 3]; STOPS] = [
     [0.23, 0.25, 0.33],
 ];
 
+/// Use Windows' native UI typeface without shipping a system-font asset.
+fn configure_fonts(ctx: &egui::Context) {
+    #[cfg(windows)]
+    {
+        let windows = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        if let Ok(bytes) = std::fs::read(windows.join("Fonts/segoeui.ttf")) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts
+                .font_data
+                .insert("segoe-ui".into(), egui::FontData::from_owned(bytes).into());
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "segoe-ui".into());
+            ctx.set_fonts(fonts);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = ctx;
+}
+
 /// Slider position to gain: a cubic curve tracks perceived loudness well.
 pub fn volume_gain(pos: f32, muted: bool) -> f32 {
     if muted {
@@ -86,6 +110,7 @@ pub fn run(player: Player, listener: Option<Listener>, config: Config) -> eframe
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
+            configure_fonts(&ctx);
             ctx.set_visuals(egui::Visuals::dark());
             ctx.style_mut_of(egui::Theme::Dark, |style| {
                 style.animation_time = 0.18;
@@ -95,6 +120,13 @@ pub fn run(player: Player, listener: Option<Listener>, config: Config) -> eframe
                 style.visuals.window_corner_radius = egui::CornerRadius::same(16);
                 style.spacing.item_spacing = vec2(10.0, 12.0);
                 style.spacing.button_padding = vec2(14.0, 8.0);
+                for (kind, size) in [
+                    (egui::TextStyle::Body, 14.0),
+                    (egui::TextStyle::Button, 13.0),
+                    (egui::TextStyle::Small, 12.0),
+                ] {
+                    style.text_styles.insert(kind, FontId::proportional(size));
+                }
             });
             let c = ctx.clone();
             player.set_waker(move || c.request_repaint());
@@ -585,7 +617,7 @@ impl eframe::App for App {
         }
 
         let inner = full.shrink2(vec2(24.0, 18.0));
-        let settings_center = pos2(inner.right() - 14.0, inner.top() + 14.0);
+        let settings_center = pos2(inner.right() - 14.0, inner.top() + 30.0);
         let header = Rect::from_min_size(inner.min, vec2(inner.width() - 42.0, 68.0));
         let controls = Rect::from_min_max(
             pos2(inner.left() + 14.0, inner.bottom() - 52.0),
@@ -685,64 +717,96 @@ impl App {
         if response.clicked() {
             self.settings_open = !self.settings_open;
         }
-        let mut open = self.settings_open;
-        egui::Window::new("Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_width(330.0)
-            .default_pos(ui.max_rect().center() - vec2(170.0, 100.0))
-            .show(ui.ctx(), |ui| {
-                if ui
-                    .checkbox(&mut self.config.animated_background, "Animated background")
-                    .changed()
-                {
-                    self.config_dirty = Some(Instant::now());
-                    self.motion = Motion::new();
-                    self.background_motion = BackgroundMotion::default();
-                }
-                ui.weak("Waves that follow your music, with a calm lower area.");
-                #[cfg(windows)]
-                {
-                    ui.separator();
-                    ui.label(egui::RichText::new("Default audio player").strong());
-                    ui.weak("Use Flacura when you open audio files in Windows.");
-                    if ui
-                        .add_enabled(
-                            self.association_task.is_none(),
-                            egui::Button::new("Set as default player"),
-                        )
-                        .clicked()
-                    {
-                        let (tx, rx) = mpsc::channel();
-                        let ctx = ui.ctx().clone();
-                        self.association_task = Some(rx);
-                        self.association_status = None;
-                        std::thread::spawn(move || {
-                            let _ = tx.send(crate::platform::register());
-                            ctx.request_repaint();
+        let ctx = ui.ctx().clone();
+        let reveal =
+            ctx.animate_bool_with_time(ui.id().with("settings-panel"), self.settings_open, 0.16);
+        if reveal < 0.01 {
+            return;
+        }
+        let full = ui.max_rect();
+        let width = 320.0f32.min(full.width() - 32.0);
+        let origin = pos2(
+            full.right() - width - 16.0 + (1.0 - reveal) * 8.0,
+            full.top() + 16.0,
+        );
+        egui::Area::new(egui::Id::new("fixed-settings"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(origin)
+            .movable(false)
+            .show(&ctx, |ui| {
+                ui.set_opacity(reveal);
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(17, 21, 29, 250))
+                    .corner_radius(12)
+                    .inner_margin(18)
+                    .show(ui, |ui| {
+                        ui.set_width(width - 36.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Settings").size(18.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(egui::Button::new("×").frame(false))
+                                        .on_hover_text("Close settings")
+                                        .clicked()
+                                    {
+                                        self.settings_open = false;
+                                    }
+                                },
+                            );
                         });
-                    }
-                    if self.association_task.is_some() {
-                        ui.spinner();
-                    }
-                    if let Some(result) = &self.association_status {
-                        match result {
-                            Ok(()) => {
-                                ui.weak(
-                                    "Choose Flacura in the Windows Settings window to confirm.",
-                                );
+                        ui.add_space(10.0);
+                        let accent = self.accent().0;
+                        if setting_toggle(
+                            ui,
+                            "Animated background",
+                            &mut self.config.animated_background,
+                            accent,
+                        ) {
+                            self.config_dirty = Some(Instant::now());
+                            self.motion = Motion::new();
+                            self.background_motion = BackgroundMotion::default();
+                        }
+                        #[cfg(windows)]
+                        {
+                            ui.add_space(12.0);
+                            if ui
+                                .add_enabled(
+                                    self.association_task.is_none(),
+                                    egui::Button::new("Set default player").frame(false),
+                                )
+                                .clicked()
+                            {
+                                let (tx, rx) = mpsc::channel();
+                                let ctx = ui.ctx().clone();
+                                self.association_task = Some(rx);
+                                self.association_status = None;
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(crate::platform::register());
+                                    ctx.request_repaint();
+                                });
                             }
-                            Err(error) => {
-                                ui.colored_label(Color32::from_rgb(250, 145, 135), error);
+                            if self.association_task.is_some() {
+                                ui.spinner();
+                            }
+                            match &self.association_status {
+                                Some(Err(error)) => {
+                                    ui.colored_label(Color32::from_rgb(250, 145, 135), error);
+                                }
+                                _ => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Confirm the choice in Windows Settings.",
+                                        )
+                                        .size(12.0)
+                                        .color(DIM),
+                                    );
+                                }
                             }
                         }
-                    } else {
-                        ui.weak("Windows asks you to confirm the final selection.");
-                    }
-                }
+                    });
             });
-        self.settings_open = open;
     }
 
     fn accent(&self) -> (Color32, Color32) {
@@ -784,7 +848,7 @@ impl App {
 
         // Quality badge (right aligned).
         let label = info.quality_label();
-        let badge_font = FontId::monospace(11.5);
+        let badge_font = FontId::proportional(11.5);
         let (fg, fill) = if info.lossless {
             (
                 GOLD_LIGHT,
@@ -867,7 +931,7 @@ impl App {
         }
         let mut sub_w = max_w;
         if !extra.is_empty() {
-            let g = p.layout_no_wrap(extra.join("  ·  "), FontId::monospace(11.0), DIM);
+            let g = p.layout_no_wrap(extra.join("  ·  "), FontId::proportional(11.0), DIM);
             sub_w = sub_w.min(r.width() - g.size().x - 16.0).max(40.0);
             p.galley(pos2(r.right() - g.size().x, r.top() + 25.0), g, DIM);
         }
@@ -1059,7 +1123,7 @@ impl App {
         if let (Some(hx), Some(d)) = (hover_x, duration) {
             let t = frac_at(hx) * d;
             let s = fmt_time(t);
-            let g = p.layout_no_wrap(s, FontId::monospace(11.0), TEXT);
+            let g = p.layout_no_wrap(s, FontId::proportional(11.0), TEXT);
             let w = g.size().x + 10.0;
             let x = (hx - w / 2.0).clamp(r.left(), r.right() - w);
             let tip = Rect::from_min_size(pos2(x, r.top() - 22.0), vec2(w, 17.0));
@@ -1090,7 +1154,7 @@ impl App {
 
         // Time; the duration is dropped when it would run into the buttons.
         let pos = self.position();
-        let font = FontId::monospace(12.0);
+        let font = FontId::proportional(12.0);
         let g = p.layout_no_wrap(fmt_time(pos), font.clone(), TEXT);
         let tw = g.size().x;
         p.galley(pos2(r.left(), cy - g.size().y / 2.0), g, TEXT);
@@ -1207,7 +1271,7 @@ impl App {
         if active {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             let label = format!("{:.0}%", level * 100.0);
-            let g = p.layout_no_wrap(label, FontId::monospace(10.5), TEXT);
+            let g = p.layout_no_wrap(label, FontId::proportional(10.5), TEXT);
             let w = g.size().x + 10.0;
             let x = (fill_x - w / 2.0).clamp(slider.left() - 20.0, r.right() - w);
             let tip = Rect::from_min_size(pos2(x, slider.top() - 20.0), vec2(w, 16.0));
@@ -1230,6 +1294,43 @@ fn waveform_levels(peak: f32, rms: f32, gain: f32) -> (f32, f32) {
     let outer = (0.10 * peak + 0.90 * rms).powf(0.75) * 0.84;
     let core = (rms.powf(0.75) * 0.68).min(outer);
     (outer, core)
+}
+
+fn setting_toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, accent: Color32) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
+            if response.clicked() {
+                *value = !*value;
+                response.mark_changed();
+                changed = true;
+            }
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *value, label)
+            });
+            let t = ui.ctx().animate_bool_with_time(response.id, *value, 0.14);
+            ui.painter()
+                .rect_filled(rect, 10.0, Color32::from_white_alpha(22));
+            ui.painter().rect_filled(
+                rect,
+                10.0,
+                Color32::from_rgba_unmultiplied(
+                    accent.r(),
+                    accent.g(),
+                    accent.b(),
+                    (t * 180.0) as u8,
+                ),
+            );
+            ui.painter().circle_filled(
+                pos2(rect.left() + 10.0 + t * 14.0, rect.center().y),
+                6.0,
+                TEXT,
+            );
+        });
+    });
+    changed
 }
 
 fn waveform_gain(rms: &mut [f32]) -> f32 {

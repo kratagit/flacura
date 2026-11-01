@@ -60,6 +60,7 @@ Open the **Settings** gear in the upper-right corner and toggle **Animated backg
 to enable or disable the music-reactive waves. The change takes effect
 immediately and is remembered after restarting. Disabling the background also
 skips its shader drawing and audio analysis; the waveform seekbar stays usable.
+Settings opens in a fixed panel. Windows UI uses the system Segoe UI typeface.
 
 Volume, mute and the animated-background preference are saved automatically to:
 

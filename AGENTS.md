@@ -57,6 +57,9 @@
   Prefer subtle translucent hover states and fast, unobtrusive transitions.
 - Settings is a subtle gear next to the track header, not a separate row or
   text pill that pushes the track information down.
+- Align the gear with the title/quality row. Settings is a fixed, non-draggable
+  panel, never a movable egui window. Use proportional Segoe UI on Windows
+  (loaded from the system with fallback), including time and quality labels.
 - The aurora must fade completely to zero above the waveform; do not retain
   residual glow or shader dither under the waveform/transport controls.
 - The seekbar uses an RMS-weighted display envelope with peak accents and
