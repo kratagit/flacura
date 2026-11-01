@@ -585,11 +585,8 @@ impl eframe::App for App {
         }
 
         let inner = full.shrink2(vec2(24.0, 18.0));
-        let top_bar = Rect::from_min_size(inner.min, vec2(inner.width(), 28.0));
-        let header = Rect::from_min_size(
-            pos2(inner.left(), top_bar.bottom() + 16.0),
-            vec2(inner.width(), 68.0),
-        );
+        let settings_center = pos2(inner.right() - 14.0, inner.top() + 14.0);
+        let header = Rect::from_min_size(inner.min, vec2(inner.width() - 42.0, 68.0));
         let controls = Rect::from_min_max(
             pos2(inner.left() + 14.0, inner.bottom() - 52.0),
             pos2(inner.right() - 14.0, inner.bottom()),
@@ -607,7 +604,7 @@ impl eframe::App for App {
         // The background starts at the top edge, below the native title bar.
         let clear_bottom = ((wave_rect.top() - 18.0 - full.top()) / full.height()).min(0.56);
         let background_moving = self.draw_background(&painter, full, dt, clear_bottom);
-        self.draw_settings(ui, top_bar);
+        self.draw_settings(ui, settings_center);
 
         if self.info.is_none() {
             self.draw_empty(&painter, inner);
@@ -671,21 +668,21 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn draw_settings(&mut self, ui: &mut egui::Ui, top_bar: Rect) {
-        let button = Rect::from_min_size(
-            pos2(top_bar.right() - 80.0, top_bar.top()),
-            vec2(80.0, top_bar.height()),
-        );
-        if ui
-            .put(
-                button,
-                egui::Button::new("Settings")
-                    .corner_radius(14)
-                    .fill(Color32::from_white_alpha(8))
-                    .stroke(Stroke::NONE),
-            )
-            .clicked()
-        {
+    fn draw_settings(&mut self, ui: &mut egui::Ui, center: Pos2) {
+        let response = button(
+            ui,
+            ui.painter(),
+            "settings",
+            center,
+            14.0,
+            true,
+            None,
+            Icon::Settings,
+        )
+        .on_hover_text("Settings");
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Settings"));
+        if response.clicked() {
             self.settings_open = !self.settings_open;
         }
         let mut open = self.settings_open;
@@ -1250,6 +1247,7 @@ fn waveform_gain(rms: &mut [f32]) -> f32 {
 
 #[derive(Clone, Copy)]
 enum Icon {
+    Settings,
     Play,
     Pause,
     Stop,
@@ -1304,6 +1302,8 @@ fn button(
             );
             if !enabled {
                 FAINT
+            } else if matches!(icon, Icon::Settings) && !hovered {
+                DIM
             } else if hovered {
                 Color32::WHITE
             } else {
@@ -1334,6 +1334,17 @@ fn button(
 fn draw_icon(p: &egui::Painter, c: Pos2, s: f32, icon: Icon, col: Color32) {
     let tri = |pts: Vec<Pos2>| egui::Shape::convex_polygon(pts, col, Stroke::NONE);
     match icon {
+        Icon::Settings => {
+            let outline = (0..32)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 32.0;
+                    let radius = s * if matches!(i % 4, 1 | 2) { 1.4 } else { 1.08 };
+                    c + vec2(angle.cos(), angle.sin()) * radius
+                })
+                .collect();
+            p.add(egui::Shape::closed_line(outline, Stroke::new(1.2, col)));
+            p.circle_stroke(c, s * 0.45, Stroke::new(1.2, col));
+        }
         Icon::Play => {
             let o = c + vec2(s * 0.15, 0.0);
             p.add(tri(vec![

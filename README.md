@@ -56,7 +56,7 @@ decoders).
 
 ## Settings
 
-Open **Settings** in the upper-right corner and toggle **Animated background**
+Open the **Settings** gear in the upper-right corner and toggle **Animated background**
 to enable or disable the music-reactive waves. The change takes effect
 immediately and is remembered after restarting. Disabling the background also
 skips its shader drawing and audio analysis; the waveform seekbar stays usable.

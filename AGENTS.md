@@ -55,6 +55,8 @@
 - Keep the player minimal: no in-app Flacura wordmark, decorative status
   indicators, large bordered cards or framed transport/waveform panels.
   Prefer subtle translucent hover states and fast, unobtrusive transitions.
+- Settings is a subtle gear next to the track header, not a separate row or
+  text pill that pushes the track information down.
 - The aurora must fade completely to zero above the waveform; do not retain
   residual glow or shader dither under the waveform/transport controls.
 - The seekbar uses an RMS-weighted display envelope with peak accents and
