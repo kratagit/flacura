@@ -101,29 +101,11 @@ pub fn run(player: Player, listener: Option<Listener>, config: Config) -> eframe
     )
 }
 
-/// A small golden record, drawn at startup instead of shipping an image.
+/// Same artwork as the icon embedded in the Windows executable.
 fn icon() -> egui::IconData {
     const N: usize = 64;
-    let mut rgba = vec![0u8; N * N * 4];
-    for y in 0..N {
-        for x in 0..N {
-            let (dx, dy) = (x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0);
-            let r = (dx * dx + dy * dy).sqrt();
-            let edge = (30.5 - r).clamp(0.0, 1.0);
-            let (c, a) = if r < 3.5 {
-                (GOLD_LIGHT, 1.0)
-            } else if r < 10.0 {
-                (BG, 1.0)
-            } else {
-                let groove = if (r as i32) % 3 == 0 { 0.82 } else { 1.0 };
-                (GOLD.gamma_multiply(groove), edge)
-            };
-            let i = (y * N + x) * 4;
-            rgba[i..i + 4].copy_from_slice(&[c.r(), c.g(), c.b(), (a * 255.0) as u8]);
-        }
-    }
     egui::IconData {
-        rgba,
+        rgba: crate::icon::rgba(N),
         width: N as u32,
         height: N as u32,
     }
