@@ -9,6 +9,54 @@ use std::os::windows::process::CommandExt;
 const PROG_ID: &str = "Flacura.AudioFile";
 
 #[cfg(windows)]
+unsafe extern "system" {
+    fn SHChangeNotify(wEventId: i32, uFlags: u32, dwItem1: *const (), dwItem2: *const ());
+    fn ShellExecuteW(
+        hwnd: *mut core::ffi::c_void,
+        lpOperation: *const u16,
+        lpFile: *const u16,
+        lpParameters: *const u16,
+        lpDirectory: *const u16,
+        nShowCmd: i32,
+    ) -> isize;
+}
+
+#[cfg(windows)]
+fn notify_shell_associations_changed() {
+    const SHCNE_ASSOCCHANGED: i32 = 0x0800_0000;
+    const SHCNF_IDLIST: u32 = 0x0000;
+    unsafe {
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+}
+
+#[cfg(windows)]
+fn open_uri(uri: &str) -> Result<(), String> {
+    let op: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = uri.encode_utf16().chain(std::iter::once(0)).collect();
+    let rc = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1, // SW_SHOWNORMAL
+        )
+    };
+    if rc > 32 {
+        Ok(())
+    } else {
+        Err(format!("Could not open Windows Settings (code {rc})"))
+    }
+}
+
+#[cfg(windows)]
 fn reg(args: &[&str]) -> Result<(), String> {
     let status = std::process::Command::new("reg")
         .creation_flags(0x08000000)
@@ -36,28 +84,47 @@ pub fn register() -> Result<(), String> {
         .into_owned();
     let exe = exe.to_string_lossy();
     let open = format!("\"{exe}\" \"%1\"");
-    let icon = format!("\"{exe}\",0");
+    let icon = format!("{exe},0");
     let classes = r"HKCU\Software\Classes";
     let prog = format!(r"{classes}\{PROG_ID}");
+    let prog_app = format!(r"{prog}\Application");
     let app = format!(r"{classes}\Applications\{exe_name}");
-    let capabilities = r"HKCU\Software\Flacura\Capabilities";
+    let capabilities = r"HKCU\Software\Clients\Media\Flacura\Capabilities";
 
-    reg(&["add", &prog, "/ve", "/d", "Audio file", "/f"])?;
-    reg(&["add", &app, "/v", "FriendlyAppName", "/d", "Flacura", "/f"])?;
+    reg(&["add", &prog, "/ve", "/d", "Flacura Audio File", "/f"])?;
+    reg(&[
+        "add",
+        &prog,
+        "/v",
+        "FriendlyTypeName",
+        "/d",
+        "Flacura Audio File",
+        "/f",
+    ])?;
     for (name, value) in [
         ("ApplicationName", "Flacura"),
         ("ApplicationDescription", "Flacura audio player"),
         ("ApplicationIcon", icon.as_str()),
     ] {
+        reg(&["add", &prog_app, "/v", name, "/d", value, "/f"])?;
         reg(&["add", capabilities, "/v", name, "/d", value, "/f"])?;
     }
+    reg(&["add", &app, "/v", "FriendlyAppName", "/d", "Flacura", "/f"])?;
+    reg(&[
+        "add",
+        &format!(r"{app}\DefaultIcon"),
+        "/ve",
+        "/d",
+        &icon,
+        "/f",
+    ])?;
     reg(&[
         "add",
         r"HKCU\Software\RegisteredApplications",
         "/v",
         "Flacura",
         "/d",
-        r"Software\Flacura\Capabilities",
+        r"Software\Clients\Media\Flacura\Capabilities",
         "/f",
     ])?;
     reg(&[
@@ -94,7 +161,9 @@ pub fn register() -> Result<(), String> {
             PROG_ID,
             "/f",
         ])?;
-        let key = format!(r"{classes}\.{ext}\OpenWithProgids");
+        let ext_key = format!(r"{classes}\.{ext}");
+        reg(&["add", &ext_key, "/ve", "/d", PROG_ID, "/f"])?;
+        let key = format!(r"{ext_key}\OpenWithProgids");
         reg(&["add", &key, "/v", PROG_ID, "/t", "REG_NONE", "/f"])?;
         reg(&[
             "add",
@@ -106,10 +175,8 @@ pub fn register() -> Result<(), String> {
             "/f",
         ])?;
     }
-    std::process::Command::new("explorer.exe")
-        .arg("ms-settings:defaultapps?registeredAppUser=Flacura")
-        .spawn()
-        .map_err(|e| format!("Could not open Windows Settings: {e}"))?;
+    notify_shell_associations_changed();
+    open_uri("ms-settings:defaultapps?registeredAppUser=Flacura")?;
     Ok(())
 }
 
@@ -139,10 +206,12 @@ pub fn unregister() -> Result<(), String> {
         "/f",
     ]);
     let _ = reg(&["delete", r"HKCU\Software\Flacura\Capabilities", "/f"]);
+    let _ = reg(&["delete", r"HKCU\Software\Clients\Media\Flacura", "/f"]);
     for ext in AUDIO_EXTENSIONS {
         let key = format!(r"{classes}\.{ext}\OpenWithProgids");
         let _ = reg(&["delete", &key, "/v", PROG_ID, "/f"]);
     }
+    notify_shell_associations_changed();
     Ok(())
 }
 
