@@ -100,14 +100,14 @@ sudo apt install pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libgl
 
 ### GitHub Actions builds
 
-Every push and pull request runs formatting, Clippy, tests and a release build
-for Windows (x86_64). You can also
-start a build manually from **Actions > build > Run workflow**. On `main`,
-builds run as part of the **releases** workflow.
+Builds run only when changes reach `main`, normally after merging a PR.
+Branch pushes, PRs and version tags do not start builds. The **releases**
+workflow runs formatting, Clippy, tests and one Windows (x86_64) release build.
 
 To download a binary, open a successful run in the repository's **Actions**
 tab and select the matching `flacura-*` artifact. Artifacts are kept for 14 days.
-Tags matching `v*` also publish a Windows ZIP archive to GitHub Releases.
+When Release Please creates a release, the same build is packaged as a Windows
+ZIP archive and attached to GitHub Releases without recompiling.
 
 ### Versioning
 
@@ -126,19 +126,21 @@ setting the final commit title:
 - `feat!: change an incompatible interface` increments MAJOR.
 - `docs:`, `ci:` and `chore:` alone do not create a new release.
 
-After changes reach `main` and the Windows checks pass, Release Please opens
-or updates a release PR containing the new versions in `Cargo.toml` and
+After changes reach `main`, Release Please opens or updates a release PR
+containing the new versions in `Cargo.toml` and
 `Cargo.lock`, and a generated `CHANGELOG.md`. Merge that PR when ready to ship.
-The bot creates the tag and GitHub Release, then builds that exact tagged
-commit and attaches the Windows ZIP archive after the build passes. No manual
-version edits or tags are needed.
+The bot creates the tag and GitHub Release. That main run builds the exact
+tagged commit once, and `publish.yml` packages the existing artifact and attaches
+the Windows ZIP archive after checks pass. No manual version edits or tags are
+needed. Merging a regular change and later merging its release PR each cause
+one build; there are no builds while either PR is open.
 
 This uses the built-in `GITHUB_TOKEN`; no personal access token is required.
 Repository settings must allow GitHub Actions to create pull requests.
-Bot-created PRs do not automatically trigger `pull_request` workflows with
-this token; `main` is checked after merge before the tag is created, and the
-release build is called directly so it does not depend on a bot tag triggering
-another workflow. If publishing fails, rerun the failed jobs in **Actions**.
+Bot-created PRs/tags do not trigger builds with this token; the main workflow
+calls the build and publishing workflows directly. A Release Please error
+does not block the normal Windows build. If publishing fails, rerun the failed
+jobs in **Actions**.
 
 ### Tests
 

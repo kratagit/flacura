@@ -92,9 +92,11 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
 
 ## GitHub Actions and releases
 
-- `build.yml` checks formatting, Clippy, tests and release compilation on
-  Windows. It runs on non-main pushes, PRs, manual dispatch and reusable calls.
-  `releases` handles main pushes and calls the same build workflow.
+- `releases` is triggered only by pushes to `main` (normally after merging).
+  Branch pushes, PRs and tag pushes do not trigger builds. Do not add them back
+  without a user request; this is primarily a personal Windows application.
+- `build.yml` is reusable only. It checks formatting, Clippy, tests and release
+  compilation once per main run, with `contents: read`, and exports its label.
 - Development artifacts use `flacura-windows-x86_64-vVERSION-dev.COMMIT` and
   expire after 14 days. Releases attach `flacura-windows-x86_64-vVERSION.zip`
   containing `flacura.exe`; no installer is currently produced.
@@ -105,12 +107,17 @@ cargo test --locked --release probe_motion -- --ignored --nocapture
   `.release-please-manifest.json`. It creates a PR updating `Cargo.toml`,
   `Cargo.lock`, the manifest and `CHANGELOG.md`. The initial release is 0.1.0.
   Do not bump versions or create/push release tags for routine changes.
-- After main passes checks, the bot prepares/updates the release PR. Merging
-  that PR creates a tag/release. `publish` calls the reusable Windows build
-  with the exact released SHA and tag, then uploads the ZIP after checks pass.
+- On main, the bot first prepares/updates the release PR, or creates a release
+  when that PR was merged. The build then uses the released SHA/tag if present,
+  otherwise the triggering main SHA. A bot failure must not block the build.
+- For a new release, `publish.yml` downloads the artifact from the same run,
+  packages it and uploads the ZIP after the build passes. It never recompiles.
+- Keep write permissions in the publishing/release workflows. A reusable
+  workflow cannot request more permissions than its caller, even for skipped
+  jobs. Do not put a `contents: write` job inside the read-only build workflow.
 - The built-in `GITHUB_TOKEN` cannot trigger new workflows through bot-created
-  PRs/tags. Keep the direct reusable workflow call; do not rely on tag-push
-  triggers alone. The tag must match the Cargo version and lockfile.
+  PRs/tags. Keep the direct reusable workflow calls. The tag must match the
+  Cargo version and lockfile; release artifacts must come from the tagged SHA.
 - GitHub Actions must be allowed to create PRs in repository settings. Inspect
   the current setting if the bot fails; do not store personal tokens or assume
   the setting is enabled. Rerun failed publishing jobs to retry asset upload.

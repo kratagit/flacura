@@ -1,0 +1,38 @@
+name: publish
+
+on:
+  workflow_call:
+    inputs:
+      artifact_label:
+        description: Version label of the existing build artifact in this run
+        type: string
+        required: true
+      release_tag:
+        description: Release to attach binaries to
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: flacura-windows-x86_64-${{ inputs.artifact_label }}
+          path: dist
+      - name: Package
+        shell: pwsh
+        env:
+          ARCHIVE_NAME: flacura-windows-x86_64-${{ inputs.artifact_label }}.zip
+        run: |
+          Compress-Archive -LiteralPath dist/flacura.exe -DestinationPath $env:ARCHIVE_NAME
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: flacura-*.zip
+          fail_on_unmatched_files: true
