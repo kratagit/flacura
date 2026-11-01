@@ -7,6 +7,7 @@ pub struct Config {
     /// Volume slider position in 0..=1 (the gain curve is applied by the UI).
     pub volume: f32,
     pub muted: bool,
+    pub animated_background: bool,
 }
 
 impl Default for Config {
@@ -14,16 +15,21 @@ impl Default for Config {
         Config {
             volume: 1.0,
             muted: false,
+            animated_background: true,
         }
     }
 }
 
 impl Config {
     pub fn load() -> Config {
-        let mut c = Config::default();
         let Some(text) = path().and_then(|p| std::fs::read_to_string(p).ok()) else {
-            return c;
+            return Config::default();
         };
+        Self::parse(&text)
+    }
+
+    fn parse(text: &str) -> Self {
+        let mut c = Config::default();
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else {
                 continue;
@@ -37,6 +43,11 @@ impl Config {
                     }
                 }
                 "muted" => c.muted = v.trim() == "true",
+                "animated_background" => {
+                    if let Ok(enabled) = v.trim().parse() {
+                        c.animated_background = enabled;
+                    }
+                }
                 _ => {}
             }
         }
@@ -48,8 +59,38 @@ impl Config {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let text = format!("volume={:.3}\nmuted={}\n", self.volume, self.muted);
-        let _ = std::fs::write(p, text);
+        let _ = std::fs::write(p, self.encode());
+    }
+
+    fn encode(&self) -> String {
+        format!(
+            "volume={:.3}\nmuted={}\nanimated_background={}\n",
+            self.volume, self.muted, self.animated_background
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_keep_background_enabled() {
+        let config = Config::parse("volume=0.500\nmuted=true\n");
+        assert!(config.animated_background);
+        assert_eq!(config.volume, 0.5);
+        assert!(config.muted);
+        assert!(Config::parse("animated_background=invalid").animated_background);
+    }
+
+    #[test]
+    fn disabled_background_survives_settings_roundtrip() {
+        let config = Config {
+            volume: 0.375,
+            muted: true,
+            animated_background: false,
+        };
+        assert_eq!(Config::parse(&config.encode()), config);
     }
 }
 
